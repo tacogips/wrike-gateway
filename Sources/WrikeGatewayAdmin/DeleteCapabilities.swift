@@ -15,6 +15,7 @@ public enum DeleteCapabilities {
     identifierArgument: String,
     pathTemplate: String,
     scopes: ScopeRequirement,
+    deletionConfirmation: DeletionConfirmation = .responseIdentifier,
     summary: String
   ) -> CapabilityDefinition {
     CapabilityDefinition(
@@ -43,6 +44,7 @@ public enum DeleteCapabilities {
         )
       ],
       result: .deletion,
+      deletionConfirmation: deletionConfirmation,
       scopes: scopes,
       summary: summary
     )
@@ -108,6 +110,7 @@ public enum DeleteCapabilities {
     identifierArgument: "commentId",
     pathTemplate: "/comments/{commentId}",
     scopes: .workspaceReadWrite,
+    deletionConfirmation: .validatedRequestIdentifierOnEmptyData,
     summary: "Deletes one comment."
   )
 
@@ -118,6 +121,7 @@ public enum DeleteCapabilities {
     identifierArgument: "attachmentId",
     pathTemplate: "/attachments/{attachmentId}",
     scopes: .workspaceReadWrite,
+    deletionConfirmation: .validatedRequestIdentifierOnEmptyData,
     summary: "Deletes one attachment."
   )
 

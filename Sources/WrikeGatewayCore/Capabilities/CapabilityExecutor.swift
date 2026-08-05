@@ -62,7 +62,11 @@ public struct CapabilityExecutor: Sendable {
     let requestID = requestIDFactory()
     let response = try await send(plan: plan, credential: resolved, requestID: requestID)
     do {
-      return try ResponseProjection.result(for: plan.definition, response: response)
+      return try ResponseProjection.result(
+        for: plan.definition,
+        response: response,
+        validatedDeletionIdentifier: plan.validatedDeletionIdentifier
+      )
     } catch let error as GatewayError {
       throw error.withContext(requestID: requestID, capabilityID: plan.capabilityID)
     }
@@ -198,5 +202,23 @@ public struct CapabilityExecutor: Sendable {
       requestID: requestID,
       responseSink: request.responseSink
     )
+  }
+}
+
+private extension CapabilityPlan {
+  /// Delete capabilities are registry-validated to accept one input object
+  /// containing one required identifier. Extracting that already-coerced value
+  /// avoids parsing a path or trusting an unvalidated caller value.
+  var validatedDeletionIdentifier: String? {
+    guard case .deletion = definition.result,
+          case .object(let fields)? = validatedArguments["input"]
+    else {
+      return nil
+    }
+    let identifiers = fields.values.compactMap { value -> String? in
+      guard case .identifier(let identifier) = value else { return nil }
+      return identifier.rawValue
+    }
+    return identifiers.count == 1 ? identifiers[0] : nil
   }
 }

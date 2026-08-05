@@ -82,6 +82,14 @@ enum AdminCases {
     )
   ]
 
+  static let responseConfirmed = all.filter {
+    $0.definition.deletionConfirmation == .responseIdentifier
+  }
+
+  static let emptyDataConfirmed = all.filter {
+    $0.definition.deletionConfirmation == .validatedRequestIdentifierOnEmptyData
+  }
+
   static func planner() throws -> CapabilityPlanner {
     CapabilityPlanner(registry: try AdminCapabilities.registry())
   }
@@ -150,7 +158,10 @@ struct AdminDeleteContractTests {
     )
   }
 
-  @Test("An unconfirmed delete is outcome-unknown, never an echo of the request", arguments: AdminCases.all)
+  @Test(
+    "An unconfirmed delete is outcome-unknown, never an echo of the request",
+    arguments: AdminCases.responseConfirmed
+  )
   func emptyEnvelopeIsOutcomeUnknown(testCase: AdminCase) async throws {
     let transport = RecordingTransport.succeeding(json: "{\"kind\":\"ids\",\"data\":[]}")
     let response = try await AdminCases.runtime(transport: transport)
@@ -163,6 +174,22 @@ struct AdminDeleteContractTests {
       response.data?[testCase.definition.field]?["deletedId"] == nil,
       "\(testCase.name) must not report the requested id as deleted"
     )
+  }
+
+  @Test(
+    "Live-proven empty delete envelopes confirm the validated request id",
+    arguments: AdminCases.emptyDataConfirmed
+  )
+  func emptyEnvelopeConfirmsReviewedEndpoint(testCase: AdminCase) async throws {
+    let transport = RecordingTransport.succeeding(json: "{\"kind\":\"ids\",\"data\":[]}")
+    let response = try await AdminCases.runtime(transport: transport)
+      .execute(document: testCase.document)
+
+    #expect(response.errors.isEmpty, "\(testCase.name): \(response.errors)")
+    #expect(
+      response.data?[testCase.definition.field]?["deletedId"]?.stringValue == testCase.identifier
+    )
+    #expect(await transport.requestCount == 1, "A delete must never be replayed")
   }
 
   @Test("A delete never retries and never infers success", arguments: AdminCases.all)
@@ -228,6 +255,17 @@ struct DestructiveOperationSafetyTests {
       "deleteComment", "deleteAttachment", "deleteTimelog", "deleteWebhook"
     ])
     #expect(DeleteCapabilities.all.count == 9)
+  }
+
+  @Test("Only live-proven empty-envelope deletes use request-id confirmation")
+  func exactEmptyEnvelopeConfirmationInventory() {
+    let capabilities = DeleteCapabilities.all.filter {
+      $0.deletionConfirmation == .validatedRequestIdentifierOnEmptyData
+    }
+    #expect(Set(capabilities.map(\.id)) == [
+      CapabilityID("comments.delete"),
+      CapabilityID("attachments.delete")
+    ])
   }
 
   @Test("Every delete is admin-tier and DELETE-backed")

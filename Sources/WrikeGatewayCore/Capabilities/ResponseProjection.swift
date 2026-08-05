@@ -61,10 +61,15 @@ public enum ResponseProjection {
   /// caller's destination path and is deliberately not in memory.
   public static func result(
     for definition: CapabilityDefinition,
-    response: WrikeResponse
+    response: WrikeResponse,
+    validatedDeletionIdentifier: String? = nil
   ) throws -> WrikeValue {
     guard case .fileOutput(let shape) = definition.result else {
-      return try result(for: definition, body: response.body)
+      return try result(
+        for: definition,
+        body: response.body,
+        validatedDeletionIdentifier: validatedDeletionIdentifier
+      )
     }
     guard let file = response.downloadedFile else {
       // Reached when Wrike answered a binary route with a body-less success,
@@ -92,7 +97,8 @@ public enum ResponseProjection {
   /// Builds the full stable result for a capability from a response body.
   public static func result(
     for definition: CapabilityDefinition,
-    body: Data
+    body: Data,
+    validatedDeletionIdentifier: String? = nil
   ) throws -> WrikeValue {
     switch definition.result {
     case .fileOutput:
@@ -133,10 +139,16 @@ public enum ResponseProjection {
 
     case .deletion:
       let items = try envelopeData(body, capability: definition.id)
-      // The identifier the caller asked to delete is never echoed back as a
-      // confirmation: an empty or unreadable `data` array means Wrike did not
-      // confirm the deletion, which is an outcome-unknown result.
-      guard let confirmed = confirmedDeletedIdentifier(in: items) else {
+      // Most endpoints must return an identifier. Only capabilities carrying
+      // the reviewed empty-response policy may confirm from the planner's
+      // already-validated single identifier when `data` is empty.
+      let confirmed = confirmedDeletedIdentifier(in: items)
+        ?? confirmedEmptyDeletion(
+          items: items,
+          policy: definition.deletionConfirmation,
+          validatedIdentifier: validatedDeletionIdentifier
+        )
+      guard let confirmed else {
         throw GatewayError(
           code: .upstreamResponseInvalid,
           message: "Wrike did not confirm which resource was deleted.",
@@ -155,6 +167,21 @@ public enum ResponseProjection {
     if let text = first.stringValue, !text.isEmpty { return text }
     if let identifier = first["id"]?.stringValue, !identifier.isEmpty { return identifier }
     return nil
+  }
+
+  private static func confirmedEmptyDeletion(
+    items: [WrikeValue],
+    policy: DeletionConfirmation,
+    validatedIdentifier: String?
+  ) -> String? {
+    guard items.isEmpty,
+          policy == .validatedRequestIdentifierOnEmptyData,
+          let validatedIdentifier,
+          !validatedIdentifier.isEmpty
+    else {
+      return nil
+    }
+    return validatedIdentifier
   }
 
   /// Maps one upstream entity onto its stable shape.

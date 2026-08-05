@@ -144,6 +144,16 @@ public struct ScopeVariant: Sendable, Equatable {
   }
 }
 
+/// How a successful DELETE response confirms the resource identifier.
+///
+/// Most Wrike endpoints echo an identifier or entity. A small reviewed subset
+/// returns an empty `data` collection on success; those capabilities may use
+/// the single validated path identifier as the confirmation instead.
+public enum DeletionConfirmation: Sendable, Equatable {
+  case responseIdentifier
+  case validatedRequestIdentifierOnEmptyData
+}
+
 /// The complete, declarative description of one capability.
 ///
 /// Registration is a single value so the GraphQL field, the tier check, the
@@ -163,6 +173,7 @@ public struct CapabilityDefinition: Sendable, Equatable {
   public let scopeVariants: [ScopeVariant]
   public let arguments: [ArgumentDefinition]
   public let result: ResultShape
+  public let deletionConfirmation: DeletionConfirmation
   public let scopes: ScopeRequirement
   public let maximumPageSize: Int?
   public let status: CapabilityStatus
@@ -187,6 +198,7 @@ public struct CapabilityDefinition: Sendable, Equatable {
     scopeVariants: [ScopeVariant] = [],
     arguments: [ArgumentDefinition] = [],
     result: ResultShape,
+    deletionConfirmation: DeletionConfirmation = .responseIdentifier,
     scopes: ScopeRequirement,
     maximumPageSize: Int? = nil,
     status: CapabilityStatus = .implemented,
@@ -202,6 +214,7 @@ public struct CapabilityDefinition: Sendable, Equatable {
     self.scopeVariants = scopeVariants
     self.arguments = arguments
     self.result = result
+    self.deletionConfirmation = deletionConfirmation
     self.scopes = scopes
     self.maximumPageSize = maximumPageSize
     self.status = status
@@ -250,6 +263,11 @@ public struct CapabilityDefinition: Sendable, Equatable {
     }
     if case .deletion = result, operationClass != .delete {
       problems.append("\(id) returns a deletion payload without being a delete operation.")
+    }
+    if deletionConfirmation != .responseIdentifier {
+      if case .deletion = result {} else {
+        problems.append("\(id) declares deletion confirmation without returning a deletion payload.")
+      }
     }
     if operationClass == .delete, case .deletion = result {} else if operationClass == .delete {
       problems.append("\(id) is a delete operation that does not return a deletion payload.")
