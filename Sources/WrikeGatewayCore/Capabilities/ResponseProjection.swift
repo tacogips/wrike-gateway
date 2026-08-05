@@ -67,10 +67,15 @@ public enum ResponseProjection {
       return try result(for: definition, body: response.body)
     }
     guard let file = response.downloadedFile else {
+      // Reached when Wrike answered a binary route with a body-less success,
+      // which the delivery refuses to turn into a zero-byte file. Naming that
+      // nothing was written is the part an operator cannot see for themselves.
       throw GatewayError(
         code: .upstreamResponseInvalid,
         message: "Wrike returned no content for \(definition.field).",
-        capabilityID: definition.id
+        capabilityID: definition.id,
+        recoveryGuidance: "No file was written. Confirm the attachment still holds content, "
+          + "then retry."
       )
     }
     return try project(

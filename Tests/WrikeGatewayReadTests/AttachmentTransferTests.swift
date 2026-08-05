@@ -212,6 +212,113 @@ struct AttachmentTransferTests {
     #expect(!FileManager.default.fileExists(atPath: destination))
   }
 
+  /// Wrike documents binary content on both file-output routes. A body-less
+  /// success therefore has to be reported, not turned into a zero-byte file
+  /// that a caller would read as a completed transfer.
+  @Test("A body-less success reports an invalid response and writes nothing", arguments: FileOutputCases.all)
+  func noContentSuccessIsReported(testCase: FileOutputCase) async throws {
+    let directory = try TemporaryDirectory()
+    let destination = directory.path("attachment.bin")
+    let transport = FileOutputCases.transport(status: 204, body: "")
+    let runtime = try ReaderCases.runtime(transport: transport)
+
+    let response = await runtime.execute(document: testCase.document(destination))
+
+    let error = try #require(response.errors.first, "\(testCase.name)")
+    #expect(error.code == .upstreamResponseInvalid)
+    #expect(error.exitCode == .rejectedRequest)
+    #expect(error.capabilityID == testCase.definition.id)
+    #expect(error.recoveryGuidance?.contains("No file was written") == true)
+    #expect(!FileManager.default.fileExists(atPath: destination), "\(testCase.name)")
+  }
+
+  /// The gateway does not take a short body on trust: it compares what arrived
+  /// against the length the response declared, so a cut-off transfer cannot be
+  /// mistaken for a complete attachment.
+  @Test("A truncated body is refused and leaves no partial file", arguments: FileOutputCases.all)
+  func truncatedBodyIsRefused(testCase: FileOutputCase) async throws {
+    let directory = try TemporaryDirectory()
+    let destination = directory.path("attachment.bin")
+    let transport = RecordingTransport(outcomes: [
+      .response(
+        WrikeResponse(
+          statusCode: 200,
+          headers: ["Content-Type": "application/octet-stream", "Content-Length": "4096"],
+          body: Data(FileOutputCases.content.utf8)
+        )
+      )
+    ])
+    let runtime = try ReaderCases.runtime(transport: transport)
+
+    let response = await runtime.execute(document: testCase.document(destination))
+
+    let error = try #require(response.errors.first, "\(testCase.name)")
+    #expect(error.code == .transportFailed)
+    #expect(!FileManager.default.fileExists(atPath: destination), "\(testCase.name)")
+    // A truncated download is a local read failure of the caller's own request,
+    // never an ambiguous write: a GET cannot have changed anything upstream.
+    #expect(!error.outcomeUnknown)
+    let rendered = response.stableValue.encodedJSON(pretty: false)
+    #expect(!rendered.contains("PDF-BYTES"), "the refusal carried attachment content")
+  }
+
+  /// A preview-less attachment type is refused exactly as a missing attachment
+  /// is, so the code alone points an operator at the wrong cause.
+  @Test("A refused preview names the type-has-no-preview cause and the alternative")
+  func refusedPreviewGuidesTheOperator() async throws {
+    let directory = try TemporaryDirectory()
+    let destination = directory.path("attachment.bin")
+    let transport = FileOutputCases.transport(status: 404, body: WrikeFixtures.errorBody)
+    let runtime = try ReaderCases.runtime(transport: transport)
+
+    let response = await runtime.execute(
+      document: """
+        { attachmentPreview(id: "IEAAAAAAIYAAAAAB", destination: "\(destination)") { path } }
+        """
+    )
+
+    let error = try #require(response.errors.first)
+    #expect(error.code == .notFound)
+    let guidance = try #require(error.recoveryGuidance)
+    #expect(guidance.contains("Not every attachment type has one"))
+    #expect(guidance.contains("attachmentDownload"))
+    // The guidance travels in the stable extensions payload, not only in a log.
+    #expect(error.extensions["recovery"]?.stringValue == guidance)
+  }
+
+  /// The guidance is capability-scoped. A missing attachment on the download
+  /// route means the identifier is wrong, and must not be explained away as a
+  /// preview that does not exist.
+  @Test("The preview guidance does not leak onto other capabilities or codes")
+  func previewGuidanceStaysScoped() async throws {
+    let directory = try TemporaryDirectory()
+    let runtime = try ReaderCases.runtime(
+      transport: FileOutputCases.transport(status: 404, body: WrikeFixtures.errorBody)
+    )
+    let downloadResponse = await runtime.execute(
+      document: """
+        { attachmentDownload(id: "IEAAAAAAIYAAAAAB", \
+        destination: "\(directory.path("download.bin"))") { path } }
+        """
+    )
+    #expect(downloadResponse.errors.first?.recoveryGuidance == nil)
+
+    // A rate limit already carries its own remedy, which the capability hint
+    // must not overwrite.
+    let limitedRuntime = try ReaderCases.runtime(
+      transport: FileOutputCases.transport(status: 429, body: WrikeFixtures.errorBody)
+    )
+    let limited = await limitedRuntime.execute(
+      document: """
+        { attachmentPreview(id: "IEAAAAAAIYAAAAAB", \
+        destination: "\(directory.path("preview.bin"))") { path } }
+        """
+    )
+    let error = try #require(limited.errors.first)
+    #expect(error.code == .rateLimited)
+    #expect(error.recoveryGuidance?.contains("400 requests per minute") == true)
+  }
+
   @Test("Neither the response nor an error can carry attachment bytes")
   func bytesStayOutOfDiagnostics() async throws {
     let directory = try TemporaryDirectory()
