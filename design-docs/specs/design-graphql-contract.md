@@ -2,7 +2,11 @@
 
 ## Status
 
-Draft
+Implemented for the curated field set. The ownership boundary, role-specific
+schemas, input design, pagination contract, error contract, and constrained
+parser scope described below are in place and covered by tests. See
+`design-docs/specs/design-capability-matrix.md#implementation-status` for the
+fields that are registered.
 
 ## Goal
 

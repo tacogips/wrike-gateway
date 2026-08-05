@@ -2,7 +2,10 @@ version: "3"
 
 vars:
   PROJECT_NAME: wrike-gateway
-  EXECUTABLE_NAME: wrike-gateway
+  # The package publishes three capability-scoped executables. `task run` uses
+  # the lowest-privilege one; use `task run:writer` or `task run:admin` for the
+  # others.
+  EXECUTABLE_NAME: wrike-gateway-reader
   TAP_DIR: ../homebrew-tap
 
 tasks:
@@ -17,9 +20,19 @@ tasks:
       - swift build
 
   run:
-    desc: Run the executable
+    desc: Run the reader executable
     cmds:
       - swift run {{.EXECUTABLE_NAME}} {{.CLI_ARGS}}
+
+  run:writer:
+    desc: Run the writer executable
+    cmds:
+      - swift run wrike-gateway-writer {{.CLI_ARGS}}
+
+  run:admin:
+    desc: Run the admin executable
+    cmds:
+      - swift run wrike-gateway-admin {{.CLI_ARGS}}
 
   test:
     desc: Run Swift tests

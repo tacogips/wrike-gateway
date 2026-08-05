@@ -2,7 +2,11 @@
 
 ## Status
 
-Draft
+Implemented. The SwiftPM target layout, product map, capability enforcement,
+transport injection, and authentication boundary described below are in place
+and covered by tests. See
+`design-docs/specs/design-capability-matrix.md#implementation-status` for
+per-capability state.
 
 ## Overview
 

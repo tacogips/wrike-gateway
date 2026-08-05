@@ -102,22 +102,22 @@ agent, persisted-query, or X transport adapter boundary.
 
 ## Deliverables
 
-- [ ] Updated `Package.swift` with four cumulative library products, three
+- [x] Updated `Package.swift` with four cumulative library products, three
       executable products, and role-specific test targets.
-- [ ] `Sources/WrikeGatewayCore/` with transport, authentication, stable
+- [x] `Sources/WrikeGatewayCore/` with transport, authentication, stable
       models, GraphQL runtime, capability metadata, command frame, and errors.
-- [ ] `Sources/WrikeGatewayRead/`, `Sources/WrikeGatewayWrite/`, and
+- [x] `Sources/WrikeGatewayRead/`, `Sources/WrikeGatewayWrite/`, and
       `Sources/WrikeGatewayAdmin/` with tier-owned adapters and schema
       registrations.
-- [ ] `Sources/WrikeGatewayReaderCLI/main.swift`,
+- [x] `Sources/WrikeGatewayReaderCLI/main.swift`,
       `Sources/WrikeGatewayWriterCLI/main.swift`, and
       `Sources/WrikeGatewayAdminCLI/main.swift`.
-- [ ] `Tests/WrikeGatewayCoreTests/`, `Tests/WrikeGatewayReadTests/`,
+- [x] `Tests/WrikeGatewayCoreTests/`, `Tests/WrikeGatewayReadTests/`,
       `Tests/WrikeGatewayWriteTests/`, `Tests/WrikeGatewayAdminTests/`, and
       `Tests/WrikeGatewayCLITests/` with recording-transport, loopback,
       redaction, schema, and binary-link assertions.
-- [ ] Canned success and failure fixtures for every resource area.
-- [ ] Updated progress and design status records after implementation behavior
+- [x] Canned success and failure fixtures for every resource area.
+- [x] Updated progress and design status records after implementation behavior
       is verified.
 
 ## Tasks
@@ -167,12 +167,12 @@ agent, persisted-query, or X transport adapter boundary.
 
 **Completion Criteria**:
 
-- [ ] Every planned capability has a verified upstream method or an explicit
+- [x] Every planned capability has a verified upstream method or an explicit
       blocked/unsupported state.
-- [ ] `deleteProject`, the excluded initial `users` collection,
+- [x] `deleteProject`, the excluded initial `users` collection,
       `TRANSPORT_FAILED`, required `WRIKE_GATEWAY_API_BASE_URL`, and all four
       pending product decisions remain explicit.
-- [ ] No secret value or staged `flake.lock` content is read into logs or
+- [x] No secret value or staged `flake.lock` content is read into logs or
       changed.
 
 ### TASK-002: Establish SwiftPM Products, Targets, and Core Contracts
@@ -218,12 +218,12 @@ agent, persisted-query, or X transport adapter boundary.
 
 **Completion Criteria**:
 
-- [ ] Four library targets, three executable targets, and five test targets
+- [x] Four library targets, three executable targets, and five test targets
       match the accepted architecture names.
-- [ ] SDK products are cumulative and consumer imports are documented by the
+- [x] SDK products are cumulative and consumer imports are documented by the
       manifest structure.
-- [ ] Shared public values compile under Swift 6 concurrency checking.
-- [ ] No source or test target remains named `AppCore`, `AppCLI`, or
+- [x] Shared public values compile under Swift 6 concurrency checking.
+- [x] No source or test target remains named `AppCore`, `AppCLI`, or
       `AppCoreTests`.
 
 ### TASK-003: Implement Transport, Authentication, and Core GraphQL Runtime
@@ -314,31 +314,31 @@ and composition-root files.
 
 **Completion Criteria**:
 
-- [ ] Recording transport and loopback tests cover success, pagination, 400,
+- [x] Recording transport and loopback tests cover success, pagination, 400,
       401, 403, 404, 429, 500, malformed payloads, redirects, and timeouts.
-- [ ] Only GET operations retry automatically; mutation outcome-unknown errors
+- [x] Only GET operations retry automatically; mutation outcome-unknown errors
       remain explicit.
-- [ ] `TRANSPORT_FAILED` remains distinct from `UPSTREAM_UNAVAILABLE`.
-- [ ] Permanent-token mode fails locally without a validated
+- [x] `TRANSPORT_FAILED` remains distinct from `UPSTREAM_UNAVAILABLE`.
+- [x] Permanent-token mode fails locally without a validated
       `WRIKE_GATEWAY_API_BASE_URL`.
-- [ ] Authentication tests cover credential precedence and empty values,
+- [x] Authentication tests cover credential precedence and empty values,
       approved-host and `/api/v4` validation, clock skew, scope checks, and
       atomic credential-store failure.
-- [ ] OAuth refresh rotation is atomic and single-flight.
-- [ ] Loopback OAuth tests cover callback state/path/host validation, missing
+- [x] OAuth refresh rotation is atomic and single-flight.
+- [x] Loopback OAuth tests cover callback state/path/host validation, missing
       code, OAuth error, timeout, code exchange, TLS redirect rejection, and
       rejection of every redirect URI override.
-- [ ] OAuth callback startup accepts only the fixed trusted localhost Keychain
+- [x] OAuth callback startup accepts only the fixed trusted localhost Keychain
       identity and fails safely before listener or browser activity for every
       invalid identity state documented in the authentication design.
-- [ ] TLS identity handling exports neither private-key material nor a
+- [x] TLS identity handling exports neither private-key material nor a
       production override and emits no certificate or Keychain record data.
-- [ ] Unsupported GraphQL syntax and fields fail before authentication or
+- [x] Unsupported GraphQL syntax and fields fail before authentication or
       network access.
-- [ ] Core planner contract tests prove typed SDK and GraphQL requests cannot
+- [x] Core planner contract tests prove typed SDK and GraphQL requests cannot
       select different capability, tier/scope validation, adapter, or stable
       error mapping for the same operation.
-- [ ] Secret-bearing values are absent from stdout, stderr, logs, snapshots,
+- [x] Secret-bearing values are absent from stdout, stderr, logs, snapshots,
       and error descriptions.
 
 ### TASK-004: Implement Reader Work-Hierarchy Capabilities
@@ -388,11 +388,11 @@ package files are reserved for TASK-006.
 - [ ] All assigned work-hierarchy matrix rows have typed SDK and Query coverage
       across the eight resource adapter namespaces, matching verified
       capability ids.
-- [ ] Reader adapters use only GET-backed reviewed operations.
-- [ ] Folder/project semantics and the excluded `users` collection match the
+- [x] Reader adapters use only GET-backed reviewed operations.
+- [x] Folder/project semantics and the excluded `users` collection match the
       accepted GraphQL contract.
-- [ ] Every capability has recording-transport success and failure tests.
-- [ ] Paired SDK/GraphQL tests prove planner and adapter parity for every
+- [x] Every capability has recording-transport success and failure tests.
+- [x] Paired SDK/GraphQL tests prove planner and adapter parity for every
       assigned reader capability.
 
 ### TASK-005: Implement Reader Collaboration and Administration Views
@@ -437,12 +437,12 @@ package files are reserved for TASK-006.
 
 - [ ] All six assigned resource families have typed SDK and Query coverage
       matching verified capability ids.
-- [ ] Reader behavior performs no create, update, delete, upload, or webhook
+- [x] Reader behavior performs no create, update, delete, upload, or webhook
       state change.
-- [ ] Attachment bytes, comment text, and webhook secrets are absent from
+- [x] Attachment bytes, comment text, and webhook secrets are absent from
       diagnostics and snapshots.
-- [ ] Every capability has recording-transport success and failure tests.
-- [ ] Paired SDK/GraphQL tests prove planner and adapter parity for every
+- [x] Every capability has recording-transport success and failure tests.
+- [x] Paired SDK/GraphQL tests prove planner and adapter parity for every
       assigned reader capability.
 
 ### TASK-006: Integrate the Reader Product and Executable
@@ -483,11 +483,11 @@ schema, capability, command, package, and CLI integration points.
 
 **Completion Criteria**:
 
-- [ ] Reader schema covers all twelve accepted resource areas without mutation
+- [x] Reader schema covers all twelve accepted resource areas without mutation
       fields.
-- [ ] Reader help, schema, SDK imports, and binary linkage expose no write or
+- [x] Reader help, schema, SDK imports, and binary linkage expose no write or
       admin capability.
-- [ ] Reader end-to-end responses use the documented JSON and error envelopes.
+- [x] Reader end-to-end responses use the documented JSON and error envelopes.
 
 ### TASK-007: Implement Writer Capabilities and Executable
 
@@ -534,14 +534,14 @@ input validation, CLI integration, and cross-resource update semantics.
 
 **Completion Criteria**:
 
-- [ ] Writer is cumulative with reader and exposes every implemented reviewed
+- [x] Writer is cumulative with reader and exposes every implemented reviewed
       create/update capability.
-- [ ] Writer schema and linkage contain no delete mutation or admin target.
-- [ ] File, membership, copy, and webhook-state inputs are bounded and
+- [x] Writer schema and linkage contain no delete mutation or admin target.
+- [x] File, membership, copy, and webhook-state inputs are bounded and
       explicitly validated.
-- [ ] Mutations do not retry automatically and report ambiguous transport
+- [x] Mutations do not retry automatically and report ambiguous transport
       outcomes safely.
-- [ ] Paired SDK/GraphQL tests prove planner and adapter parity for every
+- [x] Paired SDK/GraphQL tests prove planner and adapter parity for every
       implemented writer capability.
 
 ### TASK-008: Implement Admin Delete Capabilities and Executable
@@ -590,14 +590,14 @@ safety, and boundary review.
 
 **Completion Criteria**:
 
-- [ ] All supported reviewed DELETE operations exist only in admin.
-- [ ] `deleteProject` is present when its verified upstream mapping is
+- [x] All supported reviewed DELETE operations exist only in admin.
+- [x] `deleteProject` is present when its verified upstream mapping is
       supported and remains distinct from `deleteFolder`.
-- [ ] Destructive inputs reject wildcard, recursive, implicit descendant, and
+- [x] Destructive inputs reject wildcard, recursive, implicit descendant, and
       unbounded bulk behavior.
-- [ ] Delete operations never retry automatically or infer success from a
+- [x] Delete operations never retry automatically or infer success from a
       dropped response.
-- [ ] Paired SDK/GraphQL tests prove planner and adapter parity for every
+- [x] Paired SDK/GraphQL tests prove planner and adapter parity for every
       implemented admin capability.
 
 ### TASK-009: Complete Cross-Tier Integration and Verification
@@ -649,15 +649,15 @@ and documentation status after every tier is present.
 
 **Completion Criteria**:
 
-- [ ] All products build and all unit, contract, loopback, CLI, and boundary
+- [x] All products build and all unit, contract, loopback, CLI, and boundary
       tests pass.
-- [ ] Target names, product names, executable names, environment variables,
+- [x] Target names, product names, executable names, environment variables,
       capability ids, fields, tiers, and stable error codes are mutually
       consistent.
-- [ ] Reader cannot link or dispatch writes/deletes; writer cannot link or
+- [x] Reader cannot link or dispatch writes/deletes; writer cannot link or
       dispatch deletes.
-- [ ] Redaction and no-production-test-hook assertions pass.
-- [ ] `task build`, `task test`, and `swiftlint` pass in one clean verification
+- [x] Redaction and no-production-test-hook assertions pass.
+- [x] `task build`, `task test`, and `swiftlint` pass in one clean verification
       session.
 
 ### TASK-010: Refresh Documentation and Close the Active Plan
@@ -697,9 +697,9 @@ behavior rather than planned behavior.
 
 **Completion Criteria**:
 
-- [ ] Documentation states only behavior demonstrated by tests.
-- [ ] Pending user decisions remain visible and use the repository format.
-- [ ] The progress log contains dated results for every verification command.
+- [x] Documentation states only behavior demonstrated by tests.
+- [x] Pending user decisions remain visible and use the repository format.
+- [x] The progress log contains dated results for every verification command.
 - [ ] The plan moves to `impl-plans/completed/` only after all global criteria
       are satisfied.
 
@@ -758,27 +758,27 @@ TASK-001
 
 ## Global Completion Criteria
 
-- [ ] The package publishes cumulative SDK products `WrikeGatewayCore`,
+- [x] The package publishes cumulative SDK products `WrikeGatewayCore`,
       `WrikeGatewayRead`, `WrikeGatewayWrite`, and `WrikeGatewayAdmin`.
-- [ ] The three canonical executables build and expose only their linked tier.
-- [ ] The capability inventory covers all twelve required resource areas;
+- [x] The three canonical executables build and expose only their linked tier.
+- [x] The capability inventory covers all twelve required resource areas;
       writer has no DELETE operation and every implemented DELETE is admin-only.
-- [ ] The SDK and GraphQL paths share capability identifiers, validation,
+- [x] The SDK and GraphQL paths share capability identifiers, validation,
       the same capability-execution planner and adapters, stable models, and
       error mapping; paired parity tests pass in every tier.
-- [ ] OAuth2, refresh rotation, kinko storage, permanent-token precedence,
+- [x] OAuth2, refresh rotation, kinko storage, permanent-token precedence,
       data-center host validation, and redaction satisfy the accepted auth
       design.
-- [ ] The canonical environment variables are exactly
+- [x] The canonical environment variables are exactly
       `WRIKE_GATEWAY_API_CLIENT_ID`, `WRIKE_GATEWAY_API_CLIENT_SECRET`,
       `WRIKE_GATEWAY_ACCESS_TOKEN`, and `WRIKE_GATEWAY_API_BASE_URL`.
-- [ ] Recording transport and loopback canned-response tests cover every
+- [x] Recording transport and loopback canned-response tests cover every
       implemented capability and required failure class.
-- [ ] `deleteProject`, `TRANSPORT_FAILED`, the excluded initial `users`
+- [x] `deleteProject`, `TRANSPORT_FAILED`, the excluded initial `users`
       collection, canonical environment variables, products, executables, and
       capability tiers remain consistent across code, tests, and docs.
-- [ ] `task build`, `task test`, `swift test`, and `swiftlint` pass.
-- [ ] No unrelated release, packaging, source, or staged `flake.lock` change is
+- [x] `task build`, `task test`, `swift test`, and `swiftlint` pass.
+- [x] No unrelated release, packaging, source, or staged `flake.lock` change is
       included.
 - [ ] Every task has a dated progress entry, checked completion criteria, and
       recorded command results before the plan is marked Completed.
@@ -815,3 +815,107 @@ condition.
   enumerating every authentication test required by the accepted design. No
   implementation code was written and the pre-existing staged `flake.lock` was
   not modified.
+
+- 2026-08-05: Implementation session. TASK-001 through TASK-009 executed;
+  TASK-010 executed except for the lifecycle move, which is deliberately not
+  taken (see the outstanding work below). Commits `7af18c4` (package graph,
+  core runtime, three tiers, three executables) and `6209c03` (five test
+  targets plus the test-only support library, and two defects those tests
+  found). `git status --short` confirms the pre-existing staged `flake.lock`
+  is still staged and unmodified; every commit used path-scoped `git add`
+  limited to `Package.swift`, `Sources`, and `Tests`.
+
+  **TASK-001 (upstream revalidation).** Wrike API v4 was re-checked against the
+  official developer documentation on 2026-08-05. Directly confirmed:
+  approved data-center API hosts `www.wrike.com`, `app-eu.wrike.com`, and
+  `app-us2.wrike.com`; OAuth authorize `https://login.wrike.com/oauth2/authorize/v4`
+  and token `https://login.wrike.com/oauth2/token`, with refresh rotating both
+  tokens and the token response reporting the account `host`; HTTPS-only
+  redirect URIs with localhost guidance; the `kind` plus `data` envelope; the
+  `error` plus `errorDescription` error body with 400/401/403/404/429/500 and
+  the 400-requests-per-minute limit; `pageSize` up to 1000 with an opaque
+  `nextPageToken` on `GET /tasks` and `GET /timelogs`; no pagination parameters
+  on `GET /contacts` or `GET /comments`; and all nine reviewed DELETE routes
+  individually. Findings that changed scope: `workflows.get` is `unsupported`
+  because Wrike documents no single-workflow GET, and no paginated user-list
+  operation exists, which confirms excluding the `users` collection. The kinko
+  interface was inspected through `kinko --help` only; no secret record or
+  environment value was read or printed.
+
+  **TASK-002/003 (package graph and core runtime).** `AppCore`, `AppCLI`, and
+  `AppCoreTests` are gone with no aliases. Four cumulative library products,
+  three executables, and five test targets match `architecture.md`. Core holds
+  the injectable `WrikeTransport` with a `URLSession` live implementation, the
+  host allowlist and redirect credential policy, `Retry-After` handling and
+  GET-only bounded retry, the four-variable credential resolver, kinko-backed
+  storage, single-flight rotating refresh, the fixed callback flow gated on a
+  validated login-Keychain identity, the constrained GraphQL runtime, and the
+  shared command frame.
+
+  **TASK-004/005/006/007/008 (tiers).** Capabilities are declared once as data;
+  one `CapabilityDefinition` drives the printed schema, the validator, the
+  upstream route, the scope check, and the stable projection. Reader registers
+  28 GET-only query fields across the twelve reviewed resource areas plus
+  access roles; writer adds 27 create/update mutations and links no delete;
+  admin adds exactly the nine reviewed deletes. `CapabilityPlanner` is the only
+  execution path for both the typed SDK and GraphQL.
+
+  **TASK-009 (verification).** Commands run, all passing:
+  `task build`; `task test`; `swift test` (186 tests, 30 suites);
+  `swiftlint` (0 violations in 85 files);
+  `swift run wrike-gateway-{reader,writer,admin} --help`;
+  `swift run wrike-gateway-{reader,writer,admin} graphql schema`;
+  `git diff --check -- design-docs impl-plans Package.swift Sources Tests`;
+  `LC_ALL=C rg -n '[^ -~]' design-docs impl-plans` (no matches);
+  `git status --short`. Schema comparison confirms reader prints no `Mutation`
+  type, writer prints 27 mutations with no `delete*` field and no
+  `DeletionPayload`, and admin adds exactly the nine deletes. `nm` symbol
+  inspection of the built binaries confirms `wrike-gateway-reader` contains no
+  `WrikeGatewayWrite` or `WrikeGatewayAdmin` symbols and `wrike-gateway-writer`
+  contains no `WrikeGatewayAdmin` symbols; the same check confirms no binary
+  contains `WrikeGatewayTestSupport`. Every forbidden override flag is rejected
+  by all three binaries with exit code 2.
+
+  Note on verification commands: this plan lists `swift test --filter
+  <Target>Tests`, but swift-testing matches its filter against suite and test
+  type names rather than module names, so those forms select zero tests. Use a
+  type-name filter such as `swift test --filter ReaderCapabilityContractTests`,
+  or run `swift test` for the whole suite.
+
+  **Two defects the tests found and fixed.** `RequestBuilder` used `continue`
+  inside a `switch` in a `for` loop, which skipped the nested input-object
+  binding step entirely, so every mutation and delete failed to resolve its
+  path identifier. Caller-supplied JSON parse failures were reported as
+  `UPSTREAM_RESPONSE_INVALID` (exit 4) instead of `VALIDATION_ERROR` (exit 2).
+
+  **Capability status changes.** `implemented`: the 28 reader, 27 writer, and 9
+  admin capability ids listed in
+  `design-docs/specs/design-capability-matrix.md#implementation-status`.
+  `unsupported`: `workflows.get`, `users.list`. Still `planned` and
+  deliberately unregistered: `contacts.history`, `folders.history`,
+  `tasks.history` (the operations exist upstream but their exact route shapes
+  could not be confirmed from the official reference in this session, and the
+  plan forbids substituting an unverified route), and
+  `attachments.download`/`attachments.preview` (the upstream response is a
+  binary `application/octet-stream` body that does not fit the JSON envelope
+  and needs a reviewed file-output contract; `attachments.url` covers the
+  reviewed metadata-and-link case).
+
+  **User decisions.** All four `design-docs/user-qa/` questions were resolved by
+  the user in commit `80e1754` during this session and renamed to `qa-*.md`.
+  The implementation matches every answer: fixed TLS loopback callback and
+  fixed Keychain label with no configurable override; one default kinko-backed
+  account record keyed by tool, client id, and host, with no `--account` flag;
+  all twelve resource families in the first stable release with stability
+  phasing per capability; and webhook registration management only, with
+  deletion admin-only and no callback hosting.
+
+  **Outstanding work, blocking plan closure.** The TASK-004 and TASK-005
+  completion criterion "all assigned matrix rows have typed SDK and Query
+  coverage" is not fully satisfied: the three field-history rows and the two
+  attachment binary-transfer rows above are unimplemented. Per this plan's rule
+  that a criterion is not checked until its verification passes, those task
+  boxes and the corresponding global criterion stay unchecked and the plan
+  stays in `impl-plans/active/`. Closing it requires either confirming those
+  upstream routes and implementing them, or a reviewed decision to move them
+  out of the accepted matrix.

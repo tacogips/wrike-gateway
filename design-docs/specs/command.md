@@ -2,7 +2,8 @@
 
 ## Status
 
-Draft
+Implemented. The command grammar, JSON envelope, exit codes, and role-scoped
+help and schema output described below are in place and covered by tests.
 
 ## Binaries
 

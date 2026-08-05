@@ -2,7 +2,9 @@
 
 ## Status
 
-Draft
+Implemented. The canonical names below are in use across the package manifest,
+the source modules, the tests, and the CLI output. All four launch decisions
+were resolved on 2026-08-05 and the implementation matches every answer.
 
 ## Design Baseline
 

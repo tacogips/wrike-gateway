@@ -2,7 +2,9 @@
 
 ## Status
 
-Draft
+Implemented. The transport contract, host policy, pagination, error mapping,
+retry policy, and mock/contract test strategy described below are in place and
+covered by tests.
 
 ## Scope
 

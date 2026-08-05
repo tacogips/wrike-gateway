@@ -2,7 +2,9 @@
 
 ## Status
 
-Draft
+Implemented. Credential modes, resolution precedence, the OAuth2 flow, the
+callback TLS identity boundary, refresh handling, credential storage, and
+redaction rules described below are in place and covered by tests.
 
 ## Credential Modes
 

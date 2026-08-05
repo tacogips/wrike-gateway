@@ -2,7 +2,9 @@
 
 ## Status
 
-Draft
+Implemented for the capabilities listed under Implementation Status. Tier
+rules, naming rules, and destructive-operation rules are enforced by the
+capability registry and covered by tests.
 
 ## Tier Rules
 
@@ -84,6 +86,51 @@ is tracked as `planned`, `implemented`, `blockedByScope`, `blockedByPlan`, or
 `unsupported`. A capability becomes `implemented` only when the SDK method,
 role-specific GraphQL registration, adapter mapping, auth metadata, stable
 error mapping, and canned-response tests are all present.
+
+## Implementation Status
+
+Recorded 2026-08-05 after the initial implementation. Upstream routes were
+revalidated against the official Wrike API v4 reference on the same date. Only
+`implemented` capabilities are registered in a role schema; the planner refuses
+to execute anything else, so an unimplemented row cannot be reached at runtime.
+
+### Implemented
+
+| Tier | Capability ids |
+| --- | --- |
+| reader | `contacts.list`, `contacts.get`, `users.get`, `users.types.list`, `groups.list`, `groups.get`, `account.get`, `accessRoles.list`, `spaces.list`, `spaces.get`, `folders.list`, `folders.get`, `projects.list`, `projects.get`, `tasks.list`, `tasks.get`, `comments.list`, `comments.get`, `attachments.list`, `attachments.get`, `attachments.url`, `timelogs.list`, `timelogs.get`, `customFields.list`, `customFields.get`, `workflows.list`, `webhooks.list`, `webhooks.get` |
+| writer | `contacts.update`, `users.update`, `groups.create`, `groups.update`, `account.update`, `spaces.create`, `spaces.update`, `folders.create`, `folders.update`, `folders.copy`, `projects.create`, `projects.update`, `tasks.create`, `tasks.update`, `comments.create`, `comments.update`, `attachments.upload.task`, `attachments.upload.folder`, `attachments.update`, `timelogs.create`, `timelogs.update`, `customFields.create`, `customFields.update`, `workflows.create`, `workflows.update`, `webhooks.create`, `webhooks.update` |
+| admin | `groups.delete`, `spaces.delete`, `folders.delete`, `projects.delete`, `tasks.delete`, `comments.delete`, `attachments.delete`, `timelogs.delete`, `webhooks.delete` |
+
+All nine reviewed DELETE routes were confirmed individually against the official
+reference. `folders.delete` and `projects.delete` remain distinct public
+capabilities with distinct inputs even though both map to `DELETE /folders/{id}`.
+
+### Unsupported
+
+| Capability id | Reason |
+| --- | --- |
+| `workflows.get` | Wrike API v4 documents no single-workflow GET. Only the account-level `GET /workflows` exists. A client-side filter over the full list is not a substitute and is not registered. |
+| `users.list` | Wrike API v4 has no reviewed paginated user-list operation. Account people remain available through `contacts` with a person-type filter; no `users` collection alias is published. |
+
+### Planned, not yet implemented
+
+These rows remain in the design inventory but are not registered. They are not
+reachable from any binary.
+
+| Capability id | Blocking condition |
+| --- | --- |
+| `contacts.history`, `folders.history`, `tasks.history` | The field-history operations exist upstream, but their exact route shapes could not be confirmed from the official reference during implementation. Registering an unverified route would violate the rule against substituting an operation. |
+| `attachments.download`, `attachments.preview` | `GET /attachments/{id}/download` returns a binary `application/octet-stream` body, which does not fit the JSON response envelope. A reviewed file-output contract, including destination-path validation and file-operation error mapping, is required first. `attachments.url` covers the reviewed metadata-and-link case in the meantime. |
+
+### Pagination
+
+Only capabilities with a documented upstream page limit are modelled as
+connections: `tasks.list` and `timelogs.list`, both bounded at 1000 items per
+page with an opaque `nextPageToken`. `GET /contacts`, `GET /comments`,
+`GET /folders`, and the remaining collections document no `pageSize` or
+`nextPageToken`, so they are plain lists. A page size above a capability's
+documented maximum is rejected rather than silently clamped.
 
 ## References
 
