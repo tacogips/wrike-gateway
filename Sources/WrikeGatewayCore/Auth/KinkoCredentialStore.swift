@@ -19,6 +19,31 @@ public struct ProcessResult: Sendable, Equatable {
 }
 
 public struct SystemProcessRunner: ProcessRunner {
+  /// Collects the two output streams that are drained on separate threads.
+  private final class StreamCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private var output = Data()
+    private var errorOutput = Data()
+
+    func setOutput(_ data: Data) {
+      lock.lock()
+      defer { lock.unlock() }
+      output = data
+    }
+
+    func setErrorOutput(_ data: Data) {
+      lock.lock()
+      defer { lock.unlock() }
+      errorOutput = data
+    }
+
+    var streams: (output: Data, errorOutput: Data) {
+      lock.lock()
+      defer { lock.unlock() }
+      return (output, errorOutput)
+    }
+  }
+
   public init() {}
 
   public func run(
@@ -36,9 +61,8 @@ public struct SystemProcessRunner: ProcessRunner {
     let errorPipe = Pipe()
     process.standardOutput = outputPipe
     process.standardError = errorPipe
-    if standardInput != nil {
-      process.standardInput = Pipe()
-    }
+    let inputPipe = standardInput.map { _ in Pipe() }
+    process.standardInput = inputPipe
 
     do {
       try process.run()
@@ -50,18 +74,39 @@ public struct SystemProcessRunner: ProcessRunner {
       )
     }
 
-    if let standardInput, let inputPipe = process.standardInput as? Pipe {
-      inputPipe.fileHandleForWriting.write(standardInput)
-      inputPipe.fileHandleForWriting.closeFile()
+    // stdin, stdout, and stderr are serviced concurrently. Writing stdin or
+    // draining one output stream to EOF before touching the other deadlocks as
+    // soon as the child fills the pipe buffer nobody is reading: the child
+    // blocks on its write and this side blocks on the stream the child is no
+    // longer producing.
+    let collector = StreamCollector()
+    let group = DispatchGroup()
+    let queue = DispatchQueue.global(qos: .userInitiated)
+
+    if let standardInput, let inputHandle = inputPipe?.fileHandleForWriting {
+      queue.async(group: group) {
+        inputHandle.write(standardInput)
+        inputHandle.closeFile()
+      }
+    }
+    let outputHandle = outputPipe.fileHandleForReading
+    queue.async(group: group) {
+      collector.setOutput((try? outputHandle.readToEnd()) ?? Data())
+    }
+    let errorHandle = errorPipe.fileHandleForReading
+    queue.async(group: group) {
+      collector.setErrorOutput((try? errorHandle.readToEnd()) ?? Data())
+    }
+    await withCheckedContinuation { continuation in
+      group.notify(queue: queue) { continuation.resume() }
     }
 
-    let output = outputPipe.fileHandleForReading.readDataToEndOfFile()
-    let errorOutput = errorPipe.fileHandleForReading.readDataToEndOfFile()
     process.waitUntilExit()
+    let streams = collector.streams
     return ProcessResult(
       exitCode: process.terminationStatus,
-      standardOutput: output,
-      standardError: errorOutput
+      standardOutput: streams.output,
+      standardError: streams.errorOutput
     )
   }
 }
@@ -124,10 +169,49 @@ public struct KinkoExecutableResolver: Sendable {
 /// Neither the record body nor kinko's stderr is ever echoed, because both may
 /// contain token material.
 public struct KinkoCredentialStore: CredentialStore {
-  /// kinko's own marker for a vault that has not been unlocked. It is a fixed,
-  /// non-secret status word, so matching it exactly never risks echoing a
-  /// record.
-  private static let lockedMarker = "locked"
+  /// One way kinko reports that it could not open the vault at all.
+  private struct StoreUnavailableMarker: Sendable {
+    let exitCode: Int32
+    /// kinko's trimmed stderr. Each of these is a fixed, non-secret status
+    /// line, so matching it exactly never risks echoing a record.
+    let standardError: String
+    let message: String
+  }
+
+  /// Every store-unavailable answer kinko 0.1.8 gives, per subcommand.
+  ///
+  /// Verified on 2026-08-05 by running the commands: against the operator's
+  /// real locked vault (`kinko status` -> `locked`) with a key that does not
+  /// exist, and against an empty temporary `--kinko-dir`.
+  ///
+  /// | Command | Locked vault | No vault at that dir |
+  /// | --- | --- | --- |
+  /// | `get` | exit 1, `locked` | exit 1, `open .../vault/meta.v1.json: no such file or directory` |
+  /// | `set-key` | exit 1, `locked` | exit 12, `Vault mutation in progress.` |
+  /// | `delete` | exit 13, `Failed to load vault.` | exit 13, `Failed to load vault.` |
+  ///
+  /// `delete` never prints `locked`, so classifying on that one marker would
+  /// misclassify exactly the path where a wrong answer silently strands a
+  /// refresh token. The exit code is matched alongside the text so an
+  /// unrelated failure that happens to mention a vault is not swallowed here.
+  private static let storeUnavailableMarkers = [
+    StoreUnavailableMarker(exitCode: 1, standardError: "locked", message: "The credential store is locked."),
+    StoreUnavailableMarker(
+      exitCode: 13,
+      standardError: "Failed to load vault.",
+      message: "The credential store could not be opened."
+    ),
+    StoreUnavailableMarker(
+      exitCode: 12,
+      standardError: "Vault mutation in progress.",
+      message: "The credential store is not available for writing."
+    )
+  ]
+
+  /// `delete` cannot tell a locked vault from an absent one, so the guidance
+  /// names both recoveries rather than asserting which one applies.
+  private static let unavailableGuidance =
+    "Run `kinko unlock` (or `kinko init` if no vault exists yet), then retry."
 
   /// The OAuth record belongs to the user, not to a checkout, so the path scope
   /// is pinned to the home directory instead of the working directory.
@@ -157,7 +241,7 @@ public struct KinkoCredentialStore: CredentialStore {
   public func load(_ key: CredentialRecordKey) async throws -> OAuthTokenState? {
     let result = try await run(["get", key.storageName, "--reveal", "--force"])
     guard result.exitCode == 0 else {
-      try throwIfLocked(result)
+      try throwIfStoreUnavailable(result)
       return nil
     }
     let payload = Self.trimmed(result.standardOutput)
@@ -184,7 +268,7 @@ public struct KinkoCredentialStore: CredentialStore {
     // committed, so the caller must not claim login success.
     let result = try await run(["set-key", key.storageName, "--confirm=false"], standardInput: payload)
     guard result.exitCode == 0 else {
-      try throwIfLocked(result)
+      try throwIfStoreUnavailable(result)
       throw GatewayError(
         code: .fileOperationFailed,
         message: "The credential store did not accept the token record.",
@@ -194,10 +278,26 @@ public struct KinkoCredentialStore: CredentialStore {
   }
 
   public func delete(_ key: CredentialRecordKey) async throws -> Bool {
+    // "Nothing to remove" is decided on the `get` path, whose missing-record
+    // and store-unavailable exit codes are pinned. `delete` cannot make that
+    // distinction: kinko 0.1.8 answers both a locked vault and an absent vault
+    // with exit 13 and `Failed to load vault.`, and its missing-key exit code
+    // has not been observed against an unlocked vault. So failure is the
+    // default for every non-zero `delete` exit. Reporting `false` there would
+    // tell an operator running `auth logout` that there was nothing to remove
+    // while the refresh token is still stored.
+    guard try await hasRecord(key) else { return false }
     let result = try await run(["delete", key.storageName, "--yes"])
     guard result.exitCode == 0 else {
-      try throwIfLocked(result)
-      return false
+      try throwIfStoreUnavailable(result)
+      // Includes the benign race in which the record disappeared between the
+      // existence check and the delete: an unexplained failure is surfaced
+      // rather than reported as a successful no-op.
+      throw GatewayError(
+        code: .fileOperationFailed,
+        message: "The credential store did not remove the token record.",
+        recoveryGuidance: "Run `kinko doctor` to check the local vault, then retry."
+      )
     }
     return true
   }
@@ -209,7 +309,7 @@ public struct KinkoCredentialStore: CredentialStore {
     // not part of any contract this tool should depend on.
     let result = try await run(["get", key.storageName, "--force"])
     guard result.exitCode == 0 else {
-      try throwIfLocked(result)
+      try throwIfStoreUnavailable(result)
       return false
     }
     return true
@@ -236,15 +336,18 @@ public struct KinkoCredentialStore: CredentialStore {
     return resolved
   }
 
-  /// A locked vault is an actionable operator state, not a missing record, so
-  /// it must not be reported as "no credential is available".
-  private func throwIfLocked(_ result: ProcessResult) throws {
-    let marker = String(data: Self.trimmed(result.standardError), encoding: .utf8)
-    guard marker == Self.lockedMarker else { return }
+  /// A vault that could not be opened is an actionable operator state, not a
+  /// missing record, so it must not be reported as "no credential is
+  /// available".
+  private func throwIfStoreUnavailable(_ result: ProcessResult) throws {
+    let marker = String(data: Self.trimmed(result.standardError), encoding: .utf8) ?? ""
+    guard let match = Self.storeUnavailableMarkers.first(where: {
+      $0.exitCode == result.exitCode && $0.standardError == marker
+    }) else { return }
     throw GatewayError(
       code: .fileOperationFailed,
-      message: "The credential store is locked.",
-      recoveryGuidance: "Run `kinko unlock`, then retry."
+      message: match.message,
+      recoveryGuidance: Self.unavailableGuidance
     )
   }
 

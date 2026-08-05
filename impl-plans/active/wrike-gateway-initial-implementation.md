@@ -958,7 +958,9 @@ condition.
   `--profile` defaults to `default`; and record names must be valid environment
   keys, so the previous `wrike-gateway.oauth.<fingerprint>.<host>` name was
   rejected outright with `invalid environment key`. A locked vault prints
-  `locked` on stderr and exits 1. Each of those was confirmed by running the
+  `locked` on stderr and exits 1 **on the `get` path only**; see the
+  2026-08-05 unavailable-vault entry below for the per-subcommand markers,
+  which this entry wrongly generalised to every subcommand. Each of those was confirmed by running the
   command; no secret record, key, or environment value was read or printed, and
   every probe that could mutate state was pointed at an empty temporary
   `--kinko-dir`, which stayed empty.
@@ -1005,3 +1007,61 @@ condition.
   0.1.8 interface but has not been round-tripped against an unlocked vault,
   which requires an interactive `kinko init`/`kinko unlock` and is therefore not
   automatable in this session.
+
+- 2026-08-05: Implementation session (per-subcommand unavailable-vault
+  classification). Independent review found that the locked-vault contract
+  recorded in the previous entry held only for `get`, so `auth logout` against a
+  locked vault reported `{"removedLocalRecord":false}` with exit 0 while the
+  OAuth record, including the refresh token, was still stored.
+
+  **kinko markers actually verified, per subcommand.** Re-probed `kinko version`
+  0.1.8 rather than copying the review's markers. `kinko status` reports
+  `locked`. Against that real locked vault with a key that does not exist, at
+  the same profile and path scope: `get KEY --reveal --force` and
+  `get KEY --force` exit 1 with stderr `locked`; `set-key KEY --confirm=false`
+  with the record on stdin exits 1 with stderr `locked`; `delete KEY --yes`
+  exits 13 with stderr `Failed to load vault.`. Against an empty temporary
+  `--kinko-dir`: `get` exits 1 with `open <dir>/vault/meta.v1.json: no such
+  file or directory`; `set-key` exits 12 with `Vault mutation in progress.`;
+  `delete` exits 13 with `Failed to load vault.`. This corrects the review's
+  own evidence on one point: exit 12 comes from an uninitialised vault
+  directory, not from a locked vault, and `set-key` on a locked vault prints
+  `locked` exactly as `get` does. `delete` is the one subcommand that never
+  prints `locked`. Argument-contract probes also confirmed
+  `delete requires a key or --all` and `set-key requires --value or stdin
+  value`, and that both diagnostics are emitted before the vault load, so they
+  are reachable with an empty `--kinko-dir`. No `--reveal` was used against an
+  existing record, no secret was read or printed, the probe key does not exist,
+  and the temporary vault directory stayed empty.
+
+  **Changes.** `Sources/WrikeGatewayCore/Auth/KinkoCredentialStore.swift`:
+  `throwIfLocked` is replaced by `throwIfStoreUnavailable`, which matches the
+  exit code together with the exact stderr line against the three verified
+  markers and surfaces all of them with `kinko unlock` guidance;
+  `delete(_:)` now decides "nothing to remove" on the `get` path and never runs
+  `kinko delete` for a record that does not exist, so every non-zero `delete`
+  exit is a failure rather than a silent no-op; `SystemProcessRunner.run`
+  services stdin, stdout, and stderr concurrently instead of draining stdout to
+  EOF first. `Tests/WrikeGatewayCoreTests/Auth/KinkoCredentialStoreTests.swift`
+  gains four regression tests and the two missing contract diagnostics in the
+  opt-in integration rejection list.
+  `design-docs/specs/design-authentication.md` records the markers per
+  subcommand, and the previous progress-log entry is corrected in place.
+
+  **Verification.** `swift build` pass; `task build` pass; `swift test` and
+  `task test` pass with 213 tests in 34 suites; `swiftlint` reports 0 violations
+  in 87 files. `WRIKE_GATEWAY_KINKO_INTEGRATION=1 swift test --filter
+  storeCommandsParse` passes against the installed kinko 0.1.8 and now fails if
+  the key positional or the stdin record body is dropped. `git status --short`
+  shows the pre-existing staged `flake.lock` unmodified.
+
+  **Defects fixed from review.** F6 locked-vault classification and the silent
+  `delete` no-op (medium); F7 integration rejection list that could not detect
+  loss of the key positional or the stdin body (low); F8 `SystemProcessRunner`
+  stdout-before-stderr drain deadlock (low).
+
+  **Outstanding work, blocking plan closure.** Unchanged: three field-history
+  rows, two attachment binary-transfer rows, and the auth criterion, since
+  credential storage still has not been round-tripped against an unlocked vault
+  (`kinko init`/`kinko unlock` require an interactive password and the local
+  vault is locked).

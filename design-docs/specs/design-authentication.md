@@ -179,8 +179,28 @@ Interface constraints that follow from that inventory:
   and `/usr/local/bin/kinko`, because `Process` does not search `PATH` and the
   install prefix differs between Apple Silicon Homebrew, Intel Homebrew, and
   Nix.
-- A locked vault (kinko prints `locked` and exits 1) is reported as a locked
-  credential store with `kinko unlock` guidance, not as a missing record.
+- A vault that kinko cannot open is reported as an unavailable credential store
+  with `kinko unlock` guidance, not as a missing record. The marker is recorded
+  per subcommand, because kinko 0.1.8 does not answer the same way on every
+  path. Verified on 2026-08-05 by running each command against the operator's
+  locked vault with a key that does not exist, and against an empty temporary
+  `--kinko-dir`:
+
+  | Command | Locked vault | No vault at that directory |
+  | --- | --- | --- |
+  | `get` | exit 1, `locked` | exit 1, `open <dir>/vault/meta.v1.json: no such file or directory` |
+  | `set-key` | exit 1, `locked` | exit 12, `Vault mutation in progress.` |
+  | `delete` | exit 13, `Failed to load vault.` | exit 13, `Failed to load vault.` |
+
+  Only `get` and `set-key` print `locked`; `delete` never does. Classification
+  matches the exit code together with the exact stderr line, so an unrelated
+  failure that happens to mention a vault is not swallowed.
+- `delete` decides "nothing to remove" on the `get` path, not from its own exit
+  code, because `delete` answers a locked vault and an absent vault identically
+  and its missing-key exit code has not been observed against an unlocked
+  vault. If the record does not exist, `kinko delete` is never run. Every
+  non-zero `delete` exit is a failure, so `auth logout` cannot report
+  `removedLocalRecord: false` while the record is still stored.
 
 ## Redaction Rules
 

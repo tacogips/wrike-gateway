@@ -199,16 +199,36 @@ struct KinkoCredentialStoreContractTests {
   @Test("delete auto-confirms and never touches the whole scope")
   func deleteArguments() async throws {
     let runner = StubProcessRunner(results: [
+      // The existence check on the `get` path, then the delete itself.
+      ProcessResult(exitCode: 0, standardOutput: Data("wr***\n".utf8), standardError: Data()),
       ProcessResult(exitCode: 0, standardOutput: Data(), standardError: Data())
     ])
     #expect(try await Self.store(runner).delete(Self.key))
 
-    let invocation = try #require(await runner.invocations.first)
+    let invocations = await runner.invocations
+    #expect(invocations.count == 2)
+    #expect(invocations.first?.arguments == [
+      "get", Self.key.storageName, "--force",
+      "--path", Self.scopePath, "--profile", Self.profile
+    ])
+    let invocation = try #require(invocations.last)
     #expect(invocation.arguments == [
       "delete", Self.key.storageName, "--yes",
       "--path", Self.scopePath, "--profile", Self.profile
     ])
     #expect(!invocation.arguments.contains("--all"))
+  }
+
+  @Test("A record that does not exist is a no-op, and kinko delete is never run")
+  func deleteSkipsWhenNoRecordExists() async throws {
+    let runner = StubProcessRunner(results: [
+      ProcessResult(exitCode: 1, standardOutput: Data(), standardError: Data("secret not found\n".utf8))
+    ])
+    #expect(try await Self.store(runner).delete(Self.key) == false)
+
+    let invocations = await runner.invocations
+    #expect(invocations.count == 1)
+    #expect(invocations.first?.arguments.first == "get")
   }
 
   @Test("hasRecord checks existence without decrypting the record")
@@ -243,9 +263,11 @@ struct KinkoCredentialStoreContractTests {
 
   @Test("Every flag the store passes exists in the verified kinko help output")
   func flagsMatchTheVerifiedInterface() async throws {
+    // Five invocations: load, replace, the existence check delete makes, the
+    // delete itself, and hasRecord.
     let runner = StubProcessRunner(results: Array(
       repeating: ProcessResult(exitCode: 0, standardOutput: Data("x".utf8), standardError: Data()),
-      count: 4
+      count: 5
     ))
     let store = Self.store(runner)
     _ = try? await store.load(Self.key)
@@ -254,7 +276,7 @@ struct KinkoCredentialStoreContractTests {
     _ = try await store.hasRecord(Self.key)
 
     let invocations = await runner.invocations
-    #expect(invocations.count == 4)
+    #expect(invocations.count == 5)
     for invocation in invocations {
       let parsed = ParsedInvocation(invocation.arguments)
       #expect(["get", "set-key", "delete"].contains(parsed.subcommand), "\(parsed.subcommand)")
@@ -323,6 +345,87 @@ struct KinkoCredentialStoreContractTests {
       #expect(error.recoveryGuidance?.contains("kinko unlock") == true)
     }
   }
+
+  /// kinko 0.1.8 does not answer an unopenable vault the same way on every
+  /// path, so each subcommand is driven with the exit code and stderr that
+  /// subcommand actually produces. Verified on 2026-08-05 against the
+  /// operator's locked vault and against an empty `--kinko-dir`; the `locked`
+  /// marker alone never reaches `delete`.
+  private static let unopenableVault: [(subcommand: String, result: ProcessResult)] = [
+    ("get", ProcessResult(exitCode: 1, standardOutput: Data(), standardError: Data("locked\n".utf8))),
+    (
+      "set-key",
+      ProcessResult(exitCode: 12, standardOutput: Data(), standardError: Data("Vault mutation in progress.\n".utf8))
+    ),
+    (
+      "delete",
+      ProcessResult(exitCode: 13, standardOutput: Data(), standardError: Data("Failed to load vault.\n".utf8))
+    )
+  ]
+
+  @Test("An unopenable vault fails the write on every marker that subcommand produces")
+  func unopenableVaultFailsTheWrite() async throws {
+    for probe in Self.unopenableVault where probe.subcommand != "delete" {
+      let runner = StubProcessRunner(results: [probe.result])
+      do {
+        try await Self.store(runner).replace(Self.state(), for: Self.key)
+        Issue.record("Expected the write to fail for the \(probe.subcommand) marker")
+      } catch let error as GatewayError {
+        #expect(error.code == .fileOperationFailed)
+        #expect(error.recoveryGuidance?.contains("kinko unlock") == true, "\(probe.subcommand)")
+        // The generic "did not accept the token record" message points at
+        // `kinko doctor`, which is not the recovery for an unopened vault.
+        #expect(error.recoveryGuidance?.contains("kinko doctor") != true, "\(probe.subcommand)")
+      }
+    }
+  }
+
+  @Test("An unopenable vault fails logout instead of reporting nothing to remove")
+  func unopenableVaultFailsTheDelete() async throws {
+    // The existence check runs on the `get` path and reports the vault as
+    // locked before any delete is attempted.
+    let lockedGet = StubProcessRunner(results: [Self.unopenableVault[0].result])
+    do {
+      _ = try await Self.store(lockedGet).delete(Self.key)
+      Issue.record("Expected the locked vault to surface")
+    } catch let error as GatewayError {
+      #expect(error.code == .fileOperationFailed)
+      #expect(error.recoveryGuidance?.contains("kinko unlock") == true)
+    }
+    #expect(await lockedGet.invocations.count == 1)
+
+    // A vault that becomes unopenable between the existence check and the
+    // delete answers with exit 13 and `Failed to load vault.`, never `locked`.
+    let lockedDelete = StubProcessRunner(results: [
+      ProcessResult(exitCode: 0, standardOutput: Data("wr***\n".utf8), standardError: Data()),
+      Self.unopenableVault[2].result
+    ])
+    do {
+      _ = try await Self.store(lockedDelete).delete(Self.key)
+      Issue.record("Expected the unopenable vault to surface")
+    } catch let error as GatewayError {
+      #expect(error.code == .fileOperationFailed)
+      #expect(error.recoveryGuidance?.contains("kinko unlock") == true)
+    }
+  }
+
+  @Test("A failed delete is never reported as a successful no-op")
+  func failedDeleteIsNotANoOp() async throws {
+    // An unrecognised failure after the record was confirmed to exist. `false`
+    // here would tell the operator there was nothing to remove while the
+    // refresh token is still stored.
+    let runner = StubProcessRunner(results: [
+      ProcessResult(exitCode: 0, standardOutput: Data("wr***\n".utf8), standardError: Data()),
+      ProcessResult(exitCode: 7, standardOutput: Data(), standardError: Data("unexpected kinko failure\n".utf8))
+    ])
+    do {
+      let removed = try await Self.store(runner).delete(Self.key)
+      Issue.record("Expected the failed delete to surface, got removed=\(removed)")
+    } catch let error as GatewayError {
+      #expect(error.code == .fileOperationFailed)
+      #expect(error.message.contains("did not remove"))
+    }
+  }
 }
 
 @Suite("Kinko executable resolution")
@@ -379,6 +482,20 @@ struct KinkoExecutableResolverTests {
   .enabled(if: ProcessInfo.processInfo.environment["WRIKE_GATEWAY_KINKO_INTEGRATION"] == "1")
 )
 struct KinkoInterfaceIntegrationTests {
+  /// Every contract diagnostic kinko 0.1.8 emits for an argv this store could
+  /// plausibly regress into. Flag drift is only half of it: the last two
+  /// entries are what a dropped key positional and a dropped stdin record body
+  /// look like, and without them the suite that exists to catch argv drift
+  /// would pass while `delete` acted on nothing and `set-key` wrote nothing.
+  static let contractRejections = [
+    "unknown flag",
+    "unknown shorthand flag",
+    "invalid environment key",
+    "accepts at most",
+    "delete requires a key or --all",
+    "set-key requires --value or stdin value"
+  ]
+
   @Test("Every store command parses against the installed kinko binary")
   func storeCommandsParse() async throws {
     let executable = try #require(
@@ -387,7 +504,7 @@ struct KinkoInterfaceIntegrationTests {
     )
     let recorder = StubProcessRunner(results: Array(
       repeating: ProcessResult(exitCode: 0, standardOutput: Data("x".utf8), standardError: Data()),
-      count: 4
+      count: 5
     ))
     let store = KinkoCredentialStore(runner: recorder, executablePath: executable)
     let key = CredentialRecordKey(clientID: SecretValue("integration-probe"), host: "www.wrike.com")
@@ -414,10 +531,14 @@ struct KinkoInterfaceIntegrationTests {
       let result = try await live.run(
         executable: executable,
         arguments: invocation.arguments + ["--kinko-dir", emptyVault.path],
-        standardInput: invocation.standardInput
+        // `?? Data()` gives an empty, closed stdin rather than inheriting the
+        // test runner's. A regression that dropped the record body would
+        // otherwise leave `set-key` reading from a terminal instead of
+        // reporting `set-key requires --value or stdin value`.
+        standardInput: invocation.standardInput ?? Data()
       )
       let text = String(data: result.standardOutput + result.standardError, encoding: .utf8) ?? ""
-      for rejection in ["unknown flag", "unknown shorthand flag", "invalid environment key", "accepts at most"] {
+      for rejection in Self.contractRejections {
         #expect(!text.contains(rejection), "kinko rejected `\(invocation.arguments.joined(separator: " "))`: \(text)")
       }
     }
