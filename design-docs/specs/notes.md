@@ -52,18 +52,23 @@ excluded at link time. GraphQL-specific divergences are detailed in
 
 These names are normative across specifications and the implementation plan.
 
-## Proposed Defaults Pending User Decisions
+## Resolved User Decisions
+
+All four launch decisions were resolved on 2026-08-05 (user delegated to the
+assistant's recommendation); the answers confirm the conservative defaults:
 
 - OAuth callback: registered TLS loopback
   `https://localhost:8765/callback`, with no HTTP downgrade or authorization-URL
   output; the operator provisions one trusted certificate/private-key identity
-  in the macOS login Keychain under `wrike-gateway.oauth.localhost`.
-- Token storage: kinko-backed records with no plaintext fallback.
-- GraphQL rollout: stable curated fields, added resource family by resource
-  family rather than an automatically generated full OpenAPI schema.
-- Webhooks: manage registration and state only; do not host callback delivery
-  in the initial CLI.
-
-Pending decisions are recorded under `design-docs/user-qa/`. Until resolved,
-implementation planning uses these conservative defaults and must not erase
-the decision points.
+  in the macOS login Keychain under `wrike-gateway.oauth.localhost`. A future
+  release adds an opt-in guided certificate setup command. See
+  `design-docs/user-qa/qa-oauth-callback.md`.
+- Token storage: kinko-backed records with no plaintext fallback; one default
+  account record initially, multi-account representable later. See
+  `design-docs/user-qa/qa-token-storage.md`.
+- GraphQL rollout: all twelve resource families in the first stable release,
+  stabilized capability by capability as each reaches `implemented`; no
+  generated full OpenAPI schema. See
+  `design-docs/user-qa/qa-graphql-rollout.md`.
+- Webhooks: manage registration and state only; no callback delivery hosting.
+  See `design-docs/user-qa/qa-webhook-runtime.md`.

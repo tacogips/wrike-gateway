@@ -148,9 +148,10 @@ flag or environment override. Before browser launch, it requires one valid,
 trusted certificate/private-key identity in the current user's macOS login
 Keychain under the fixed label `wrike-gateway.oauth.localhost`. Missing or
 invalid identity state fails with exit code `3`; the command does not generate,
-import, export, or trust certificates. Configurable callbacks, automated
-certificate provisioning, and manual handoff remain future decisions documented
-in `design-docs/user-qa/pending-oauth-callback.md`.
+import, export, or trust certificates. The resolved callback strategy is
+documented in `design-docs/user-qa/qa-oauth-callback.md`: the fixed callback
+and identity label stay, a future release adds opt-in guided certificate
+setup, and configurable callbacks and manual handoff stay out of scope.
 
 `auth status` reports only the selected credential kind, account host, scopes,
 expiry status, whether refresh state is available, and whether a valid callback

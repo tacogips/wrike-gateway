@@ -105,9 +105,10 @@ continues to own OAuth token records, not callback TLS identities. An injected
 identity-loader boundary supplies deterministic success and failure fixtures in
 tests without adding a production CLI override.
 
-Configurable callbacks, automated certificate provisioning, alternate identity
-labels, and manual handoff remain future decisions in
-`design-docs/user-qa/pending-oauth-callback.md`.
+The resolved callback strategy in
+`design-docs/user-qa/qa-oauth-callback.md` keeps the fixed callback and
+identity label, plans an opt-in guided certificate setup command for a future
+release, and rules out configurable callbacks and manual handoff.
 
 ## Refresh Flow
 
@@ -134,9 +135,11 @@ the Wrike account/host so accounts do not overwrite each other.
 
 Required operations are load, atomic replace, metadata-only status, and local
 delete. Stored secret records must use kinko's protected storage and restrictive
-permissions. Plaintext fallback is not automatic. The exact multi-account
-selection and cache policy remains pending in
-`design-docs/user-qa/pending-token-storage.md`.
+permissions. Plaintext fallback is not automatic. Per
+`design-docs/user-qa/qa-token-storage.md`, the initial release stores one
+default account record; the record key remains scoped by client id and
+account/host so named multi-account records can be added later without
+migration.
 
 ## Redaction Rules
 
