@@ -196,22 +196,19 @@ struct KinkoCredentialStoreContractTests {
     #expect(!invocation.arguments.joined().contains("fake-refresh"))
   }
 
-  @Test("delete auto-confirms and never touches the whole scope")
+  @Test("delete auto-confirms, names one key, and runs exactly one command")
   func deleteArguments() async throws {
     let runner = StubProcessRunner(results: [
-      // The existence check on the `get` path, then the delete itself.
-      ProcessResult(exitCode: 0, standardOutput: Data("wr***\n".utf8), standardError: Data()),
-      ProcessResult(exitCode: 0, standardOutput: Data(), standardError: Data())
+      ProcessResult(exitCode: 0, standardOutput: Data("deleted\n".utf8), standardError: Data())
     ])
     #expect(try await Self.store(runner).delete(Self.key))
 
     let invocations = await runner.invocations
-    #expect(invocations.count == 2)
-    #expect(invocations.first?.arguments == [
-      "get", Self.key.storageName, "--force",
-      "--path", Self.scopePath, "--profile", Self.profile
-    ])
-    let invocation = try #require(invocations.last)
+    // One invocation: `delete` reports a missing key itself, so no separate
+    // existence check runs and there is no window between the two in which the
+    // record can change.
+    #expect(invocations.count == 1)
+    let invocation = try #require(invocations.first)
     #expect(invocation.arguments == [
       "delete", Self.key.storageName, "--yes",
       "--path", Self.scopePath, "--profile", Self.profile
@@ -219,8 +216,10 @@ struct KinkoCredentialStoreContractTests {
     #expect(!invocation.arguments.contains("--all"))
   }
 
-  @Test("A record that does not exist is a no-op, and kinko delete is never run")
+  @Test("A record that does not exist is reported as a no-op by delete itself")
   func deleteSkipsWhenNoRecordExists() async throws {
+    // kinko 0.1.8 answers a missing key with exit 1 and `secret not found` on
+    // `delete` exactly as it does on `get`.
     let runner = StubProcessRunner(results: [
       ProcessResult(exitCode: 1, standardOutput: Data(), standardError: Data("secret not found\n".utf8))
     ])
@@ -228,7 +227,7 @@ struct KinkoCredentialStoreContractTests {
 
     let invocations = await runner.invocations
     #expect(invocations.count == 1)
-    #expect(invocations.first?.arguments.first == "get")
+    #expect(invocations.first?.arguments.first == "delete")
   }
 
   @Test("hasRecord checks existence without decrypting the record")
@@ -263,11 +262,10 @@ struct KinkoCredentialStoreContractTests {
 
   @Test("Every flag the store passes exists in the verified kinko help output")
   func flagsMatchTheVerifiedInterface() async throws {
-    // Five invocations: load, replace, the existence check delete makes, the
-    // delete itself, and hasRecord.
+    // Four invocations: load, replace, delete, and hasRecord.
     let runner = StubProcessRunner(results: Array(
       repeating: ProcessResult(exitCode: 0, standardOutput: Data("x".utf8), standardError: Data()),
-      count: 5
+      count: 4
     ))
     let store = Self.store(runner)
     _ = try? await store.load(Self.key)
@@ -276,7 +274,7 @@ struct KinkoCredentialStoreContractTests {
     _ = try await store.hasRecord(Self.key)
 
     let invocations = await runner.invocations
-    #expect(invocations.count == 5)
+    #expect(invocations.count == 4)
     for invocation in invocations {
       let parsed = ParsedInvocation(invocation.arguments)
       #expect(["get", "set-key", "delete"].contains(parsed.subcommand), "\(parsed.subcommand)")
@@ -382,48 +380,85 @@ struct KinkoCredentialStoreContractTests {
 
   @Test("An unopenable vault fails logout instead of reporting nothing to remove")
   func unopenableVaultFailsTheDelete() async throws {
-    // The existence check runs on the `get` path and reports the vault as
-    // locked before any delete is attempted.
-    let lockedGet = StubProcessRunner(results: [Self.unopenableVault[0].result])
+    // `delete` answers an unopenable vault with exit 13 and
+    // `Failed to load vault.`, never `locked`.
+    let runner = StubProcessRunner(results: [Self.unopenableVault[2].result])
     do {
-      _ = try await Self.store(lockedGet).delete(Self.key)
-      Issue.record("Expected the locked vault to surface")
+      let removed = try await Self.store(runner).delete(Self.key)
+      Issue.record("Expected the unopenable vault to surface, got removed=\(removed)")
     } catch let error as GatewayError {
       #expect(error.code == .fileOperationFailed)
       #expect(error.recoveryGuidance?.contains("kinko unlock") == true)
     }
-    #expect(await lockedGet.invocations.count == 1)
-
-    // A vault that becomes unopenable between the existence check and the
-    // delete answers with exit 13 and `Failed to load vault.`, never `locked`.
-    let lockedDelete = StubProcessRunner(results: [
-      ProcessResult(exitCode: 0, standardOutput: Data("wr***\n".utf8), standardError: Data()),
-      Self.unopenableVault[2].result
-    ])
-    do {
-      _ = try await Self.store(lockedDelete).delete(Self.key)
-      Issue.record("Expected the unopenable vault to surface")
-    } catch let error as GatewayError {
-      #expect(error.code == .fileOperationFailed)
-      #expect(error.recoveryGuidance?.contains("kinko unlock") == true)
-    }
+    #expect(await runner.invocations.count == 1)
   }
+
+  /// Anything that is neither exit 0 nor the pinned `secret not found` marker
+  /// is a failure. A kinko upgrade that rewords a status line, a keychain
+  /// error, or a corrupt vault therefore surfaces instead of being reported as
+  /// an empty store.
+  private static let unrecognisedFailure = ProcessResult(
+    exitCode: 7,
+    standardOutput: Data(),
+    standardError: Data("unexpected kinko failure\n".utf8)
+  )
 
   @Test("A failed delete is never reported as a successful no-op")
   func failedDeleteIsNotANoOp() async throws {
-    // An unrecognised failure after the record was confirmed to exist. `false`
-    // here would tell the operator there was nothing to remove while the
-    // refresh token is still stored.
-    let runner = StubProcessRunner(results: [
-      ProcessResult(exitCode: 0, standardOutput: Data("wr***\n".utf8), standardError: Data()),
-      ProcessResult(exitCode: 7, standardOutput: Data(), standardError: Data("unexpected kinko failure\n".utf8))
-    ])
+    // `false` here would tell an operator running `auth logout` that there was
+    // nothing to remove while the refresh token is still stored.
+    let runner = StubProcessRunner(results: [Self.unrecognisedFailure])
     do {
       let removed = try await Self.store(runner).delete(Self.key)
       Issue.record("Expected the failed delete to surface, got removed=\(removed)")
     } catch let error as GatewayError {
       #expect(error.code == .fileOperationFailed)
       #expect(error.message.contains("did not remove"))
+    }
+  }
+
+  @Test("An unrecognised failure is never reported as a missing record")
+  func unrecognisedFailureIsNotAMissingRecord() async throws {
+    // `load` returning nil would read as "no credential is configured" and send
+    // the operator through a fresh login instead of naming the real fault.
+    let loadRunner = StubProcessRunner(results: [Self.unrecognisedFailure])
+    do {
+      let loaded = try await Self.store(loadRunner).load(Self.key)
+      Issue.record("Expected the failed load to surface, got \(String(describing: loaded))")
+    } catch let error as GatewayError {
+      #expect(error.code == .fileOperationFailed)
+      #expect(error.message.contains("did not return"))
+    }
+
+    let existsRunner = StubProcessRunner(results: [Self.unrecognisedFailure])
+    do {
+      let exists = try await Self.store(existsRunner).hasRecord(Self.key)
+      Issue.record("Expected the failed existence check to surface, got \(exists)")
+    } catch let error as GatewayError {
+      #expect(error.code == .fileOperationFailed)
+      #expect(error.message.contains("existence check"))
+    }
+  }
+
+  @Test("A missing record is decided by the pinned marker, not by any non-zero exit")
+  func missingRecordRequiresTheMarker() async throws {
+    // Exit 1 is shared by the missing-record marker and the locked-vault
+    // marker, so the stderr line is what separates them.
+    let missing = ProcessResult(
+      exitCode: 1,
+      standardOutput: Data(),
+      standardError: Data("secret not found\n".utf8)
+    )
+    #expect(try await Self.store(StubProcessRunner(results: [missing])).load(Self.key) == nil)
+    #expect(try await Self.store(StubProcessRunner(results: [missing])).hasRecord(Self.key) == false)
+    #expect(try await Self.store(StubProcessRunner(results: [missing])).delete(Self.key) == false)
+
+    let locked = ProcessResult(exitCode: 1, standardOutput: Data(), standardError: Data("locked\n".utf8))
+    do {
+      _ = try await Self.store(StubProcessRunner(results: [locked])).hasRecord(Self.key)
+      Issue.record("Expected the locked vault to surface")
+    } catch let error as GatewayError {
+      #expect(error.recoveryGuidance?.contains("kinko unlock") == true)
     }
   }
 }
@@ -504,7 +539,7 @@ struct KinkoInterfaceIntegrationTests {
     )
     let recorder = StubProcessRunner(results: Array(
       repeating: ProcessResult(exitCode: 0, standardOutput: Data("x".utf8), standardError: Data()),
-      count: 5
+      count: 4
     ))
     let store = KinkoCredentialStore(runner: recorder, executablePath: executable)
     let key = CredentialRecordKey(clientID: SecretValue("integration-probe"), host: "www.wrike.com")

@@ -16,7 +16,7 @@ private enum FrameHarness {
     transport: RecordingTransport,
     files: [String: String] = [:],
     identity: StubIdentityLoader.Behavior = .valid,
-    store: InMemoryCredentialStore = InMemoryCredentialStore(),
+    store: any CredentialStore = InMemoryCredentialStore(),
     environment: StaticEnvironmentReader = StaticEnvironmentReader()
   ) throws -> CommandFrame {
     let registry = try CapabilityRegistry(tier: role.tier, definitions: definitions)
@@ -60,6 +60,7 @@ private enum FrameHarness {
     transport: RecordingTransport,
     files: [String: String] = [:],
     identity: StubIdentityLoader.Behavior = .valid,
+    store: any CredentialStore = InMemoryCredentialStore(),
     environment: StaticEnvironmentReader = StaticEnvironmentReader()
   ) throws -> CommandFrame {
     try make(
@@ -68,9 +69,26 @@ private enum FrameHarness {
       transport: transport,
       files: files,
       identity: identity,
+      store: store,
       environment: environment
     )
   }
+}
+
+/// A credential store whose backend is unavailable, standing in for a kinko
+/// vault that cannot be opened or answers in a way the store does not
+/// recognise.
+private struct UnavailableCredentialStore: CredentialStore {
+  static let failure = GatewayError(
+    code: .fileOperationFailed,
+    message: "The credential store could not be opened.",
+    recoveryGuidance: "Run `kinko unlock` (or `kinko init` if no vault exists yet), then retry."
+  )
+
+  func load(_ key: CredentialRecordKey) async throws -> OAuthTokenState? { throw Self.failure }
+  func replace(_ state: OAuthTokenState, for key: CredentialRecordKey) async throws { throw Self.failure }
+  func delete(_ key: CredentialRecordKey) async throws -> Bool { throw Self.failure }
+  func hasRecord(_ key: CredentialRecordKey) async throws -> Bool { throw Self.failure }
 }
 
 @Suite("Reader command end to end")
@@ -239,6 +257,27 @@ struct ReaderCommandEndToEndTests {
 
     #expect(outcome.exitCode == .success)
     #expect(outcome.standardOutput.contains("\"removedLocalRecord\":false"))
+  }
+
+  @Test("auth logout fails loudly when the credential store cannot answer")
+  func authLogoutSurfacesStoreFailure() async throws {
+    // The failure this covers is silent success: reporting
+    // `removedLocalRecord: false` with exit 0 tells an operator there was
+    // nothing to remove while the refresh token is still stored.
+    let frame = try FrameHarness.reader(
+      transport: taskTransport(),
+      store: UnavailableCredentialStore(),
+      environment: StaticEnvironmentReader([
+        .clientID: "fake-client-id",
+        .clientSecret: "fake-client-secret"
+      ])
+    )
+    let outcome = await frame.run(arguments: ["auth", "logout"])
+
+    #expect(outcome.exitCode == .localResource)
+    #expect(outcome.standardOutput.contains("FILE_OPERATION_FAILED"))
+    #expect(outcome.standardOutput.contains("kinko unlock"))
+    #expect(!outcome.standardOutput.contains("removedLocalRecord"))
   }
 
   @Test("auth oauth2 without client configuration exits 3 with safe guidance")

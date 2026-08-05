@@ -178,6 +178,20 @@ public struct KinkoCredentialStore: CredentialStore {
     let message: String
   }
 
+  /// The one answer that means "this key is not in the vault" rather than "this
+  /// command failed".
+  ///
+  /// Verified on 2026-08-05 against an unlocked disposable vault at
+  /// `kinko version` 0.1.8: a key that does not exist answers exit 1 with
+  /// stderr `secret not found` on both `get` and `delete`. It shares exit 1
+  /// with the locked-vault marker, so the stderr line is matched as well.
+  ///
+  /// Everything outside this marker and `storeUnavailableMarkers` is a thrown
+  /// error, never a missing record. Treating an unrecognised failure as "no
+  /// record" is what lets `auth logout` report `removedLocalRecord: false`
+  /// while the refresh token is still stored.
+  private static let recordMissingMarker = (exitCode: Int32(1), standardError: "secret not found")
+
   /// Every store-unavailable answer kinko 0.1.8 gives, per subcommand.
   ///
   /// Verified on 2026-08-05 by running the commands: against the operator's
@@ -241,7 +255,7 @@ public struct KinkoCredentialStore: CredentialStore {
   public func load(_ key: CredentialRecordKey) async throws -> OAuthTokenState? {
     let result = try await run(["get", key.storageName, "--reveal", "--force"])
     guard result.exitCode == 0 else {
-      try throwIfStoreUnavailable(result)
+      try requireMissingRecord(result, otherwise: "The credential store did not return the token record.")
       return nil
     }
     let payload = Self.trimmed(result.standardOutput)
@@ -278,38 +292,25 @@ public struct KinkoCredentialStore: CredentialStore {
   }
 
   public func delete(_ key: CredentialRecordKey) async throws -> Bool {
-    // "Nothing to remove" is decided on the `get` path, whose missing-record
-    // and store-unavailable exit codes are pinned. `delete` cannot make that
-    // distinction: kinko 0.1.8 answers both a locked vault and an absent vault
-    // with exit 13 and `Failed to load vault.`, and its missing-key exit code
-    // has not been observed against an unlocked vault. So failure is the
-    // default for every non-zero `delete` exit. Reporting `false` there would
-    // tell an operator running `auth logout` that there was nothing to remove
-    // while the refresh token is still stored.
-    guard try await hasRecord(key) else { return false }
+    // A single invocation. `delete` reports a missing key itself, so there is
+    // no existence check to race against, and "nothing to remove" is answered
+    // by the same command that would have removed it.
     let result = try await run(["delete", key.storageName, "--yes"])
     guard result.exitCode == 0 else {
-      try throwIfStoreUnavailable(result)
-      // Includes the benign race in which the record disappeared between the
-      // existence check and the delete: an unexplained failure is surfaced
-      // rather than reported as a successful no-op.
-      throw GatewayError(
-        code: .fileOperationFailed,
-        message: "The credential store did not remove the token record.",
-        recoveryGuidance: "Run `kinko doctor` to check the local vault, then retry."
-      )
+      try requireMissingRecord(result, otherwise: "The credential store did not remove the token record.")
+      return false
     }
     return true
   }
 
   public func hasRecord(_ key: CredentialRecordKey) async throws -> Bool {
     // `--reveal` is deliberately omitted, so this check never decrypts the
-    // token. Existence is decided from the exit code alone: kinko exits
-    // non-zero for a missing key, and the masked body it prints on success is
-    // not part of any contract this tool should depend on.
+    // token. Existence is decided from the exit status and the missing-record
+    // marker; the masked body kinko prints on success is not part of any
+    // contract this tool should depend on.
     let result = try await run(["get", key.storageName, "--force"])
     guard result.exitCode == 0 else {
-      try throwIfStoreUnavailable(result)
+      try requireMissingRecord(result, otherwise: "The credential store did not answer the existence check.")
       return false
     }
     return true
@@ -336,11 +337,31 @@ public struct KinkoCredentialStore: CredentialStore {
     return resolved
   }
 
+  /// Returns normally only when kinko reported that the record does not exist.
+  ///
+  /// Every other non-zero exit throws: an unopenable vault as its own
+  /// actionable state, and anything unrecognised as `otherwise`. A caller may
+  /// therefore treat a normal return as "no record" without the risk that a
+  /// failure it did not anticipate is reported as an empty store.
+  private func requireMissingRecord(_ result: ProcessResult, otherwise message: String) throws {
+    let marker = String(data: Self.trimmed(result.standardError), encoding: .utf8) ?? ""
+    if result.exitCode == Self.recordMissingMarker.exitCode,
+      marker == Self.recordMissingMarker.standardError {
+      return
+    }
+    try throwIfStoreUnavailable(result, marker: marker)
+    throw GatewayError(
+      code: .fileOperationFailed,
+      message: message,
+      recoveryGuidance: "Run `kinko doctor` to check the local vault, then retry."
+    )
+  }
+
   /// A vault that could not be opened is an actionable operator state, not a
   /// missing record, so it must not be reported as "no credential is
   /// available".
-  private func throwIfStoreUnavailable(_ result: ProcessResult) throws {
-    let marker = String(data: Self.trimmed(result.standardError), encoding: .utf8) ?? ""
+  private func throwIfStoreUnavailable(_ result: ProcessResult, marker: String? = nil) throws {
+    let marker = marker ?? String(data: Self.trimmed(result.standardError), encoding: .utf8) ?? ""
     guard let match = Self.storeUnavailableMarkers.first(where: {
       $0.exitCode == result.exitCode && $0.standardError == marker
     }) else { return }

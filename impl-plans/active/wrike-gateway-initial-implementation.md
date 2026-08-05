@@ -766,14 +766,19 @@ TASK-001
 - [x] The SDK and GraphQL paths share capability identifiers, validation,
       the same capability-execution planner and adapters, stable models, and
       error mapping; paired parity tests pass in every tier.
-- [ ] OAuth2, refresh rotation, kinko storage, permanent-token precedence,
+- [x] OAuth2, refresh rotation, kinko storage, permanent-token precedence,
       data-center host validation, and redaction satisfy the accepted auth
-      design. Blocking condition: every part except kinko storage is verified.
-      The kinko command contract is now pinned against the interface printed by
-      `kinko get|set-key|delete --help` at `kinko version` 0.1.8 and is replayed
-      through the installed binary by an opt-in test, but no round trip against
-      an unlocked vault has been executed in this environment, so credential
-      storage is not proven end to end.
+      design. kinko storage is now proven end to end: the command contract is
+      pinned against the interface printed by `kinko get|set-key|delete --help`
+      at `kinko version` 0.1.8, replayed through the installed binary by an
+      opt-in test, and round-tripped by `KinkoRoundTripTests`
+      (`WRIKE_GATEWAY_KINKO_ROUNDTRIP=1`) against a real unlocked vault for
+      load, replace, rotation, delete, and repeated delete. The live Wrike
+      authorization-code exchange and refresh rotation against
+      `login.wrike.com` remain unexercised, since they require an operator
+      browser session and a registered OAuth application; that boundary is
+      recorded as a residual risk rather than as a gap in this criterion, whose
+      subject is the local auth implementation.
 - [x] The canonical environment variables are exactly
       `WRIKE_GATEWAY_API_CLIENT_ID`, `WRIKE_GATEWAY_API_CLIENT_SECRET`,
       `WRIKE_GATEWAY_ACCESS_TOKEN`, and `WRIKE_GATEWAY_API_BASE_URL`.
@@ -1064,4 +1069,96 @@ condition.
   rows, two attachment binary-transfer rows, and the auth criterion, since
   credential storage still has not been round-tripped against an unlocked vault
   (`kinko init`/`kinko unlock` require an interactive password and the local
-  vault is locked).
+  vault is locked). Correction, 2026-08-05 (later session): that blocking
+  condition was wrong. `kinko init`/`kinko unlock` accept the password on
+  stdin, so the round trip was automatable all along; it has now been executed
+  and the auth criterion is checked. See the entry below.
+
+- 2026-08-05: Implementation session (missing-record marker, single-invocation
+  delete, and a real vault round trip). Independent review found that the
+  previous fix moved the silent-no-op defect one call earlier rather than
+  closing it, and that the blocking condition recorded against the auth
+  criterion was factually incorrect.
+
+  **kinko contract verified against an unlocked vault.** Re-probed rather than
+  copying the review's evidence. A disposable vault was created
+  non-interactively at `kinko version` 0.1.8:
+  `printf 'pw\npw\n' | kinko init --path <temp scope> --profile default
+  --kinko-dir <temp dir> --force --keychain-preflight off` exits 0, and
+  `printf 'pw\n' | kinko unlock ...` exits 0 with `kinko status` reporting
+  `unlocked`. Against that unlocked vault, with the store's own argv:
+  `set-key KEY --confirm=false` with the record on stdin exits 0 (`KEY set`);
+  `get KEY --force` exits 0 and prints `********`; `get KEY --reveal --force`
+  exits 0 and returns the record byte-identical; `delete KEY --yes` exits 0
+  (`deleted`); and afterwards both `get KEY --force` and `delete KEY --yes`
+  exit 1 with stderr `secret not found`. Probed before any write, a key that
+  does not exist answers exit 1 / `secret not found` on both `get` and
+  `delete`. The three store-unavailable markers were re-confirmed unchanged:
+  locked vault `get` exit 1 / `locked`, `set-key` exit 1 / `locked`, `delete`
+  exit 13 / `Failed to load vault.`; empty `--kinko-dir` `set-key` exit 12 /
+  `Vault mutation in progress.`. Only synthetic record material was written.
+
+  **Two kinko side effects found while probing, both now handled.** First,
+  `kinko init --kinko-dir <dir>` rewrites the bootstrap config at
+  `~/.config/kinko/bootstrap.toml` so every later kinko command defaults to
+  `<dir>`; the first round-trip run therefore left the operator's kinko
+  pointing at a deleted temporary directory, and `kinko status`,
+  `kinko config show`, and `kinko config set` all failed until the file was
+  restored to `kinko_dir="/Users/taco/.local/kinko"` by hand. The suite now
+  passes `--config <temporary file>` on every command and asserts the
+  operator's bootstrap config is byte-identical after the run; re-verified by
+  diff. Second, an unlock session is not isolated by `--kinko-dir` or `--path`:
+  unlocking the disposable vault makes `kinko status` report `unlocked` for
+  every scope. The suite is therefore enabled only when the operator's own
+  scope reports `locked`, and it locks the session again before returning, so
+  it cannot end a session it did not start. `kinko status` for the operator's
+  scope was `locked` before this session and is `locked` after it. The review's
+  R1/R5 guidance to use `--path $HOME` was not followed for this reason: a
+  temporary path scope is used instead, so no disposable record can collide
+  with a real one.
+
+  **Changes.** `Sources/WrikeGatewayCore/Auth/KinkoCredentialStore.swift`: the
+  missing-record marker (exit 1 with stderr `secret not found`) is pinned in
+  production classification next to the store-unavailable table, and
+  `requireMissingRecord` replaces the permissive fall-through, so `load`
+  returns `nil`, `hasRecord` returns `false`, and `delete` returns `false` only
+  on that marker while every other non-zero exit throws; `delete(_:)` is back
+  to a single `kinko delete KEY --yes` invocation, which removes the second
+  kinko call and the window between the existence check and the delete.
+  `Tests/WrikeGatewayCoreTests/Auth/KinkoCredentialStoreTests.swift` follows the
+  single invocation (delete contract, no-op, unopenable vault, flag inventory
+  now 4 invocations) and gains two tests that an unrecognised failure is never
+  a missing record and that the marker, not the exit code alone, decides.
+  `Tests/WrikeGatewayCoreTests/Auth/KinkoRoundTripTests.swift` is new: an
+  opt-in real-vault round trip. `Tests/WrikeGatewayCoreTests/Auth/
+  SystemProcessRunnerTests.swift` is new: the concurrent-drain regression test
+  plus stream separation and missing-executable coverage.
+  `Tests/WrikeGatewayCLITests/CommandFrameEndToEndTests.swift` takes an
+  `any CredentialStore` seam and adds an end-to-end test that `auth logout`
+  against an unavailable store exits 4 with `FILE_OPERATION_FAILED` and prints
+  no `removedLocalRecord` field at all.
+  `design-docs/specs/design-authentication.md` records the missing-record
+  marker, the single-invocation delete, the two kinko side effects, and a
+  narrowed Status block. The auth global completion criterion is checked, with
+  the live Wrike authorization exchange named as what remains.
+
+  **Verification.** `swift build` pass; `task build` pass; `swift test` and
+  `task test` pass with 220 tests in 36 suites; `swiftlint` reports 0
+  violations in 89 files. `WRIKE_GATEWAY_KINKO_INTEGRATION=1 swift test
+  --filter storeCommandsParse` passes against the installed kinko 0.1.8.
+  `WRIKE_GATEWAY_KINKO_ROUNDTRIP=1 swift test --filter roundTrip` passes
+  against a real unlocked vault. The new drain test was proved non-vacuous by
+  temporarily restoring the sequential drain: the test then failed with
+  `Time limit was exceeded: 60.000 seconds` instead of passing. The temporary
+  edit was reverted and the suite re-run green. `git status --short` shows the
+  pre-existing staged `flake.lock` unmodified.
+
+  **Defects fixed from review.** F9 silent logout no-op surviving on the
+  existence-check path, and the design-doc invariant that asserted otherwise
+  (medium); F10 incorrect blocking condition on the auth completion criterion
+  (medium); F11 missing regression test for the concurrent-drain fix (low).
+
+  **Outstanding work, blocking plan closure.** Three field-history rows and two
+  attachment binary-transfer rows remain unimplemented with their blocking
+  conditions recorded; the two reader-coverage criteria and the lifecycle move
+  stay unchecked for that reason.

@@ -2,16 +2,23 @@
 
 ## Status
 
-Implemented, with one seam not proven end to end. Credential modes, resolution
-precedence, the OAuth2 flow, the callback TLS identity boundary, refresh
-handling, and redaction rules described below are in place and covered by tests.
+Implemented. Credential modes, resolution precedence, the OAuth2 flow, the
+callback TLS identity boundary, refresh handling, and redaction rules described
+below are in place and covered by tests.
 
-Credential storage is implemented and its command contract is pinned against the
+Credential storage is implemented, its command contract is pinned against the
 verified `kinko` 0.1.8 interface (argv, stdin, scope flags, and exit-code
 handling for load, replace, delete, and existence checks), and an opt-in test
-replays that exact argv through the installed binary. A full round trip against
-an unlocked vault has not been executed in this environment, so
-`load`/`replace`/`delete` against a real provisioned record remain unverified.
+replays that exact argv through the installed binary. `load`, `replace`,
+`delete`, and the existence check are additionally round-tripped against a real
+unlocked vault by `KinkoRoundTripTests` (opt in with
+`WRIKE_GATEWAY_KINKO_ROUNDTRIP=1`), which writes a synthetic record into a
+disposable vault and asserts that a stored record decodes to what was written,
+that a rotation overwrites in place, and that a repeated delete reports the
+no-op. What remains unexercised is the live Wrike side of the flow: no
+authorization code has been exchanged with, and no refresh token rotated
+against, the real `login.wrike.com` endpoint, because that needs an operator
+browser session and a registered OAuth application.
 
 ## Credential Modes
 
@@ -195,12 +202,35 @@ Interface constraints that follow from that inventory:
   Only `get` and `set-key` print `locked`; `delete` never does. Classification
   matches the exit code together with the exact stderr line, so an unrelated
   failure that happens to mention a vault is not swallowed.
-- `delete` decides "nothing to remove" on the `get` path, not from its own exit
-  code, because `delete` answers a locked vault and an absent vault identically
-  and its missing-key exit code has not been observed against an unlocked
-  vault. If the record does not exist, `kinko delete` is never run. Every
-  non-zero `delete` exit is a failure, so `auth logout` cannot report
-  `removedLocalRecord: false` while the record is still stored.
+- A record that does not exist is reported by exactly one marker: exit 1 with
+  stderr `secret not found`, on both `get` and `delete`. Verified on 2026-08-05
+  against an unlocked disposable vault. It shares exit 1 with the locked-vault
+  marker, so the stderr line is matched as well.
+- Only that marker means "no record". Every other non-zero exit throws:
+  `load` returns `nil`, `hasRecord` returns `false`, and `delete` returns
+  `false` on the missing-record marker alone, so an unrecognised failure -- a
+  kinko upgrade that rewords a status line, a keychain error, a corrupt vault --
+  can never be reported as an empty store. `auth logout` therefore cannot report
+  `removedLocalRecord: false` while the record is still stored, and `auth
+  status` cannot report "no credential" for a vault that failed to answer.
+- `delete` runs as a single command. Because it reports a missing key itself,
+  there is no separate existence check and no window between the two in which
+  the record can change.
+
+Two kinko behaviors constrain how the round-trip test may be written, both
+observed on 2026-08-05 at kinko 0.1.8:
+
+- `kinko init --kinko-dir <dir>` rewrites the bootstrap config at
+  `~/.config/kinko/bootstrap.toml` so that every later kinko command defaults to
+  `<dir>`. A test that creates a disposable vault must therefore also pass
+  `--config <temporary file>`, or it leaves the operator's kinko pointing at a
+  directory it then deletes. `KinkoRoundTripTests` passes both flags and asserts
+  that the operator's bootstrap config is byte-identical after the run.
+- An unlock session is not isolated by `--kinko-dir` or `--path`. Unlocking a
+  disposable vault makes `kinko status` report `unlocked` for every scope, and
+  locking returns every scope to `locked`. `KinkoRoundTripTests` therefore only
+  runs when the operator's own scope reports `locked`, so it can never end a
+  session it did not start.
 
 ## Redaction Rules
 
