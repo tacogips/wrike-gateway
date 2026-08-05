@@ -133,7 +133,7 @@ public struct CommandFrame: Sendable {
     )
   }
 
-  static func decodeVariables(_ data: Data?, source: String) throws -> [String: WrikeValue] {
+  public static func decodeVariables(_ data: Data?, source: String) throws -> [String: WrikeValue] {
     guard let data, !data.isEmpty else { return [:] }
     return try WrikeValue.decodeJSONObject(data, context: source)
   }

@@ -15,9 +15,22 @@ extension WrikeValue {
     return try convert(object)
   }
 
-  /// Decodes a JSON document that must be an object, such as GraphQL variables.
+  /// Decodes a caller-supplied JSON document that must be an object, such as
+  /// GraphQL variables.
+  ///
+  /// Parse failures here are local usage errors, not upstream failures, so they
+  /// map to `VALIDATION_ERROR` and exit code 2 rather than to the
+  /// `UPSTREAM_RESPONSE_INVALID` that `decodeJSON` reports for a Wrike body.
   public static func decodeJSONObject(_ data: Data, context: String) throws -> [String: WrikeValue] {
-    let value = try decodeJSON(data)
+    let value: WrikeValue
+    do {
+      value = try decodeJSON(data)
+    } catch {
+      throw GatewayError.validation(
+        "\(context) is not valid JSON.",
+        recovery: "Supply a JSON object such as {\"id\": \"IEAAAAAAKQAB5FNY\"}."
+      )
+    }
     guard case .object(let fields) = value else {
       throw GatewayError.validation("\(context) must decode to a JSON object.")
     }

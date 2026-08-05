@@ -153,7 +153,9 @@ enum RequestBuilder {
         guard case .filePath(let file) = value else { break }
         upload = makeUpload(path: file)
       case .scope, .container:
-        continue
+        // These carry no binding of their own; `break` leaves the switch so the
+        // nested input-object bindings below still run.
+        break
       }
 
       if case .object(let fields) = value,

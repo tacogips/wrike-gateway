@@ -47,18 +47,40 @@ let package = Package(
       name: "WrikeGatewayAdminCLI",
       dependencies: ["WrikeGatewayCore", "WrikeGatewayRead", "WrikeGatewayWrite", "WrikeGatewayAdmin"]
     ),
-    .testTarget(name: "WrikeGatewayCoreTests", dependencies: ["WrikeGatewayCore"]),
+    // Test-only support: recording transport, loopback server, injected clock,
+    // credential, identity, and file seams. No executable target depends on it,
+    // so no production binary can contain a mock or fixture path.
+    .target(
+      name: "WrikeGatewayTestSupport",
+      dependencies: ["WrikeGatewayCore"],
+      path: "Tests/WrikeGatewayTestSupport"
+    ),
+    .testTarget(
+      name: "WrikeGatewayCoreTests",
+      dependencies: ["WrikeGatewayCore", "WrikeGatewayTestSupport"]
+    ),
     .testTarget(
       name: "WrikeGatewayReadTests",
-      dependencies: ["WrikeGatewayCore", "WrikeGatewayRead"]
+      dependencies: ["WrikeGatewayCore", "WrikeGatewayRead", "WrikeGatewayTestSupport"]
     ),
     .testTarget(
       name: "WrikeGatewayWriteTests",
-      dependencies: ["WrikeGatewayCore", "WrikeGatewayRead", "WrikeGatewayWrite"]
+      dependencies: [
+        "WrikeGatewayCore",
+        "WrikeGatewayRead",
+        "WrikeGatewayWrite",
+        "WrikeGatewayTestSupport"
+      ]
     ),
     .testTarget(
       name: "WrikeGatewayAdminTests",
-      dependencies: ["WrikeGatewayCore", "WrikeGatewayRead", "WrikeGatewayWrite", "WrikeGatewayAdmin"]
+      dependencies: [
+        "WrikeGatewayCore",
+        "WrikeGatewayRead",
+        "WrikeGatewayWrite",
+        "WrikeGatewayAdmin",
+        "WrikeGatewayTestSupport"
+      ]
     ),
     // The CLI test target depends on the three executable targets so that
     // `swift test` alone builds the binaries that its link-boundary and
@@ -70,6 +92,7 @@ let package = Package(
         "WrikeGatewayRead",
         "WrikeGatewayWrite",
         "WrikeGatewayAdmin",
+        "WrikeGatewayTestSupport",
         "WrikeGatewayReaderCLI",
         "WrikeGatewayWriterCLI",
         "WrikeGatewayAdminCLI"

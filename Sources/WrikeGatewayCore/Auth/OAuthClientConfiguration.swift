@@ -42,13 +42,24 @@ public enum WrikeOAuthEndpoints {
   /// The fixed macOS login-Keychain application label for the callback identity.
   public static let callbackIdentityLabel = "wrike-gateway.oauth.localhost"
 
-  public static func components(ofRedirectURI raw: String) -> (host: String, port: Int, path: String)? {
+  /// The parts of the fixed redirect URI that the callback validator checks.
+  public struct RedirectComponents: Sendable, Equatable {
+    public let host: String
+    public let port: Int
+    public let path: String
+  }
+
+  public static func components(ofRedirectURI raw: String) -> RedirectComponents? {
     guard let components = URLComponents(string: raw),
           components.scheme?.lowercased() == "https",
           let host = components.host
     else {
       return nil
     }
-    return (host.lowercased(), components.port ?? 443, components.path)
+    return RedirectComponents(
+      host: host.lowercased(),
+      port: components.port ?? 443,
+      path: components.path
+    )
   }
 }

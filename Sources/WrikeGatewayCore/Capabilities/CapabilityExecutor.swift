@@ -166,7 +166,7 @@ public struct CapabilityExecutor: Sendable {
   }
 
   /// Resolves the relative request against the credential's validated base URL.
-  static func prepare(
+  public static func prepare(
     _ request: WrikeRequest,
     credential: ResolvedCredential,
     requestID: String
