@@ -165,7 +165,7 @@ are stored through a credential-store protocol, with kinko as the required
 initial backend.
 
 The fixed OAuth callback obtains an opaque TLS identity handle from the current
-user's macOS login Keychain under the application label
+user's macOS login Keychain under the Keychain label
 `wrike-gateway.oauth.localhost`. Identity lookup and trust validation sit behind
 an injectable core boundary. Private-key material never leaves Keychain, and a
 missing or invalid identity fails before listener startup or browser launch.

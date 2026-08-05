@@ -3,19 +3,27 @@ import Security
 
 /// The production callback-identity loader.
 ///
-/// It queries the current user's login Keychain for the fixed application
-/// label, then validates that exactly one identity matches and that the
-/// certificate is currently valid, covers `localhost`, permits TLS server
+/// It enumerates the current user's Keychain identities, selects the ones
+/// carrying the fixed label, then validates that exactly one matches and that
+/// the certificate is currently valid, covers `localhost`, permits TLS server
 /// authentication, is trusted by macOS for `https://localhost`, and exposes an
 /// accessible private key. Only an opaque handle is returned.
+///
+/// The label match is applied in code rather than in the `SecItemCopyMatching`
+/// query. A `kSecClassIdentity` query against a file-based login Keychain
+/// silently ignores `kSecAttrLabel` and `kSecAttrApplicationLabel` and returns
+/// every identity, so a query-side filter would report a duplicate on any
+/// machine holding more than one identity. `kSecAttrApplicationLabel` is not
+/// even returned for an identity, so the readable `kSecAttrLabel` is the
+/// attribute the operator provisions and this loader matches.
 public struct KeychainTLSIdentityLoader: CallbackTLSIdentityLoader {
   public init() {}
 
   public func loadIdentity(label: String) throws -> CallbackTLSIdentityHandle {
     let query: [String: Any] = [
       kSecClass as String: kSecClassIdentity,
-      kSecAttrApplicationLabel as String: Data(label.utf8),
       kSecMatchLimit as String: kSecMatchLimitAll,
+      kSecReturnAttributes as String: true,
       kSecReturnRef as String: true
     ]
 
@@ -24,7 +32,12 @@ public struct KeychainTLSIdentityLoader: CallbackTLSIdentityLoader {
     if status == errSecItemNotFound {
       throw CallbackTLSIdentityFailure.missing.asGatewayError(label: label)
     }
-    guard status == errSecSuccess, let matches = result as? [SecIdentity], !matches.isEmpty else {
+    guard status == errSecSuccess, let items = result as? [[String: Any]], !items.isEmpty else {
+      throw CallbackTLSIdentityFailure.missing.asGatewayError(label: label)
+    }
+
+    let matches = Self.identities(in: items, labelled: label)
+    if matches.isEmpty {
       throw CallbackTLSIdentityFailure.missing.asGatewayError(label: label)
     }
     guard matches.count == 1, let identity = matches.first else {
@@ -70,6 +83,31 @@ public struct KeychainTLSIdentityLoader: CallbackTLSIdentityLoader {
     // stays coarse on purpose: the CLI must not disclose certificate contents.
     let failure = Self.classify(evaluationError)
     throw failure.asGatewayError(label: label)
+  }
+
+  /// Selects the returned attribute dictionaries whose Keychain label equals
+  /// `label`.
+  ///
+  /// Separated from the Keychain call so the selection rule is testable without
+  /// a provisioned Keychain: the caller supplies the dictionaries that
+  /// `SecItemCopyMatching` would have returned. This is the filter the Keychain
+  /// query itself does not apply.
+  static func matchingItems(in items: [[String: Any]], labelled label: String) -> [[String: Any]] {
+    items.filter { $0[kSecAttrLabel as String] as? String == label }
+  }
+
+  /// Resolves the labelled attribute dictionaries to identity references,
+  /// dropping any entry that did not carry one.
+  static func identities(in items: [[String: Any]], labelled label: String) -> [SecIdentity] {
+    matchingItems(in: items, labelled: label).compactMap { item in
+      guard let reference = item[kSecValueRef as String],
+            CFGetTypeID(reference as CFTypeRef) == SecIdentityGetTypeID()
+      else {
+        return nil
+      }
+      // swiftlint:disable:next force_cast
+      return (reference as! SecIdentity)
+    }
   }
 
   static func classify(_ error: CFError?) -> CallbackTLSIdentityFailure {

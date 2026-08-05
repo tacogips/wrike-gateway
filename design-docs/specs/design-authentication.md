@@ -92,10 +92,19 @@ printing the URL, because the URL contains the client id and OAuth state.
 ## OAuth Callback TLS Identity
 
 The initial listener loads exactly one certificate/private-key identity from
-the current user's macOS login Keychain using the fixed application label
+the current user's macOS login Keychain using the fixed Keychain label
 `wrike-gateway.oauth.localhost`. Creating, signing, trusting, renewing, and
 importing that identity are operator-managed prerequisites; the CLI does not
 generate certificates, import private keys, or modify trust settings.
+
+The label match is applied by the loader, not by the Keychain query. A
+`kSecClassIdentity` query against a file-based login Keychain silently ignores
+`kSecAttrLabel` and `kSecAttrApplicationLabel` and returns every identity the
+user holds, and it does not return `kSecAttrApplicationLabel` at all. A
+query-side filter would therefore report an ambiguous identity on any machine
+holding more than one identity, which is the normal state of a developer
+machine. The loader enumerates identities and selects on the readable
+`kSecAttrLabel`, which is the attribute the operator provisions.
 
 Before binding the listener or opening the browser, the identity loader must
 verify that:
