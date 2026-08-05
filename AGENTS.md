@@ -32,7 +32,9 @@ This is `wrike-gateway`, a Swift Package Manager project with a Nix development 
 task build
 task test
 task lint
-swift run wrike-gateway --help
+swift run wrike-gateway-reader --help
+swift run wrike-gateway-writer --help
+swift run wrike-gateway-admin --help
 ```
 
 ## Swift Code Development

@@ -71,6 +71,14 @@ A permanent token takes precedence for the process and requires a validated
 account discovery. OAuth2 tokens are stored through kinko's protected storage
 with no plaintext fallback. No command line flag accepts a token or secret.
 
+The credential store shells out to `kinko`, resolved from `PATH` and then from
+`/opt/homebrew/bin/kinko` and `/usr/local/bin/kinko`. The record is written to
+the `default` profile of the home-directory path scope, so the same token is
+visible wherever the binary runs, and the record body is passed on stdin rather
+than on the command line. The vault must be unlocked (`kinko unlock`) before an
+OAuth2 credential can be read or written; a locked vault is reported as a locked
+credential store rather than as a missing credential.
+
 `auth oauth2` uses the fixed redirect `https://localhost:8765/callback` and
 requires one valid, trusted certificate/private-key identity in the current
 user's macOS login Keychain under the label `wrike-gateway.oauth.localhost`.

@@ -2,9 +2,16 @@
 
 ## Status
 
-Implemented. Credential modes, resolution precedence, the OAuth2 flow, the
-callback TLS identity boundary, refresh handling, credential storage, and
-redaction rules described below are in place and covered by tests.
+Implemented, with one seam not proven end to end. Credential modes, resolution
+precedence, the OAuth2 flow, the callback TLS identity boundary, refresh
+handling, and redaction rules described below are in place and covered by tests.
+
+Credential storage is implemented and its command contract is pinned against the
+verified `kinko` 0.1.8 interface (argv, stdin, scope flags, and exit-code
+handling for load, replace, delete, and existence checks), and an opt-in test
+replays that exact argv through the installed binary. A full round trip against
+an unlocked vault has not been executed in this environment, so
+`load`/`replace`/`delete` against a real provisioned record remain unverified.
 
 ## Credential Modes
 
@@ -142,6 +149,38 @@ permissions. Plaintext fallback is not automatic. Per
 default account record; the record key remains scoped by client id and
 account/host so named multi-account records can be added later without
 migration.
+
+### Verified kinko Command Contract
+
+The following was verified against `kinko version` 0.1.8 by reading
+`kinko get --help`, `kinko set-key --help`, and `kinko delete --help`, and is
+pinned by `Tests/WrikeGatewayCoreTests/Auth/KinkoCredentialStoreTests.swift`:
+
+| Operation | Command |
+| --- | --- |
+| load | `kinko get KEY --reveal --force --path <home> --profile default` |
+| replace | `kinko set-key KEY --confirm=false --path <home> --profile default`, record on stdin |
+| delete | `kinko delete KEY --yes --path <home> --profile default` |
+| exists | `kinko get KEY --force --path <home> --profile default` (masked, never decrypted) |
+
+Interface constraints that follow from that inventory:
+
+- Record names must be valid environment keys (letter or underscore first, then
+  letters, digits, or underscores), so the record name is
+  `WRIKE_GATEWAY_OAUTH_<client fingerprint>_<host>`.
+- The record body is written on stdin. `--value` would place token material in
+  the process listing, where any local user can read it.
+- `--force` is required because kinko blocks sensitive output for
+  non-tty/redirection, which is every invocation made by this tool.
+- `--path` defaults to the working directory and `--profile` is overridable by
+  `KINKO_PROFILE`, so both are pinned; the path scope is the user's home
+  directory, because the record belongs to the user rather than to a checkout.
+- The executable is resolved from `PATH` first, then `/opt/homebrew/bin/kinko`
+  and `/usr/local/bin/kinko`, because `Process` does not search `PATH` and the
+  install prefix differs between Apple Silicon Homebrew, Intel Homebrew, and
+  Nix.
+- A locked vault (kinko prints `locked` and exits 1) is reported as a locked
+  credential store with `kinko unlock` guidance, not as a missing record.
 
 ## Redaction Rules
 

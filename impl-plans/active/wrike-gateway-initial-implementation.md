@@ -766,9 +766,14 @@ TASK-001
 - [x] The SDK and GraphQL paths share capability identifiers, validation,
       the same capability-execution planner and adapters, stable models, and
       error mapping; paired parity tests pass in every tier.
-- [x] OAuth2, refresh rotation, kinko storage, permanent-token precedence,
+- [ ] OAuth2, refresh rotation, kinko storage, permanent-token precedence,
       data-center host validation, and redaction satisfy the accepted auth
-      design.
+      design. Blocking condition: every part except kinko storage is verified.
+      The kinko command contract is now pinned against the interface printed by
+      `kinko get|set-key|delete --help` at `kinko version` 0.1.8 and is replayed
+      through the installed binary by an opt-in test, but no round trip against
+      an unlocked vault has been executed in this environment, so credential
+      storage is not proven end to end.
 - [x] The canonical environment variables are exactly
       `WRIKE_GATEWAY_API_CLIENT_ID`, `WRIKE_GATEWAY_API_CLIENT_SECRET`,
       `WRIKE_GATEWAY_ACCESS_TOKEN`, and `WRIKE_GATEWAY_API_BASE_URL`.
@@ -842,7 +847,11 @@ condition.
   because Wrike documents no single-workflow GET, and no paginated user-list
   operation exists, which confirms excluding the `users` collection. The kinko
   interface was inspected through `kinko --help` only; no secret record or
-  environment value was read or printed.
+  environment value was read or printed. **Corrected on 2026-08-05 by the
+  entry dated 2026-08-05 (kinko interface correction) below:** `kinko --help`
+  does not print subcommand flags, so this was not a verification of the
+  credential-store interface, and the interface that was implemented from it
+  did not exist.
 
   **TASK-002/003 (package graph and core runtime).** `AppCore`, `AppCLI`, and
   `AppCoreTests` are gone with no aliases. Four cumulative library products,
@@ -932,3 +941,67 @@ condition.
   stays in `impl-plans/active/`. Closing it requires either confirming those
   upstream routes and implementing them, or a reviewed decision to move them
   out of the accepted matrix.
+
+- 2026-08-05: Implementation session (kinko interface correction). Independent
+  review found that the credential store's kinko invocations did not exist in
+  the installed CLI, so the entire OAuth token-storage path was non-functional
+  in production while every test passed against a recording mock.
+
+  **kinko interface actually verified.** `kinko version` reports `0.1.8`
+  (`/opt/homebrew/bin/kinko`). `kinko get --help`, `kinko set-key --help`,
+  `kinko delete --help`, `kinko set --help`, and `kinko --help` were read
+  directly. Findings: `get KEY` accepts `--reveal` and no `--quiet`; `set-key
+  KEY` accepts `--value` and a value on stdin, and no `--stdin` flag exists;
+  `delete KEY` accepts `-y/--yes` and no `--quiet`; the global `--force`
+  overrides the non-tty/redirection guardrail that blocks sensitive output for
+  every piped read; `--path` defaults to the current working directory and
+  `--profile` defaults to `default`; and record names must be valid environment
+  keys, so the previous `wrike-gateway.oauth.<fingerprint>.<host>` name was
+  rejected outright with `invalid environment key`. A locked vault prints
+  `locked` on stderr and exits 1. Each of those was confirmed by running the
+  command; no secret record, key, or environment value was read or printed, and
+  every probe that could mutate state was pointed at an empty temporary
+  `--kinko-dir`, which stayed empty.
+
+  **Corrected TASK-001 finding.** The earlier entry recorded the kinko
+  interface as inspected through `kinko --help`, which does not print
+  subcommand flags. That was not a verification, and the interface implemented
+  from it did not exist. The TASK-001 completion criteria are unchanged, but the
+  auth global criterion is now unchecked with its blocking condition recorded.
+
+  **Changes.** `Sources/WrikeGatewayCore/Auth/KinkoCredentialStore.swift`
+  (verified argv per operation, record on stdin instead of argv, pinned
+  `--path`/`--profile` scope, `--force` for the non-tty guardrail,
+  `--confirm=false` for the write, PATH-then-Homebrew-prefix executable
+  resolution, locked-vault classification, byte-stable record encoding);
+  `Sources/WrikeGatewayCore/Auth/CredentialStore.swift` (environment-key record
+  name); `Sources/WrikeGatewayCore/Auth/LoopbackCallbackListener.swift` (atomic
+  single-resume claim); `Sources/WrikeGatewayCore/Capabilities/ResponseProjection.swift`
+  and `CapabilityExecutor.swift` (an unconfirmed delete is outcome-unknown
+  instead of echoing the requested id); `Tests/WrikeGatewayCoreTests/Auth/`,
+  `Tests/WrikeGatewayAdminTests/`, `Tests/WrikeGatewayCLITests/`,
+  `Tests/WrikeGatewayTestSupport/InjectedSeams.swift`; `AGENTS.md`,
+  `README.md`, `design-docs/specs/design-authentication.md`, and this plan.
+
+  **Verification.** `swift build` pass; `task build` pass; `swift test` and
+  `task test` pass with 209 tests in 34 suites; `swiftlint` reports 0 violations
+  in 87 files. The opt-in
+  `WRIKE_GATEWAY_KINKO_INTEGRATION=1 swift test --filter storeCommandsParse`
+  replays the store's real argv and stdin through the installed kinko and
+  passes; it is skipped in the default run. `git status --short` shows the
+  pre-existing staged `flake.lock` unmodified.
+
+  **Defects fixed from review.** F1 kinko command contract (high); F2 hardcoded
+  Apple-Silicon Homebrew path (medium); F3 non-atomic single-resume guard (low);
+  F4 delete response with an empty `data` array echoing the requested id (low);
+  F5 stale `swift run wrike-gateway --help` in `AGENTS.md` (low). Two defects
+  found while fixing F1 and not in the review: the record name was not a legal
+  kinko key at all, and a locked vault was reported as "no credential is
+  available" instead of an actionable locked-store error.
+
+  **Outstanding work, blocking plan closure.** Unchanged from the previous
+  entry (three field-history rows and two attachment binary-transfer rows), plus
+  the new auth criterion above: credential storage is pinned to the verified
+  0.1.8 interface but has not been round-tripped against an unlocked vault,
+  which requires an interactive `kinko init`/`kinko unlock` and is therefore not
+  automatable in this session.
