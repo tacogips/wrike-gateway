@@ -170,6 +170,79 @@ struct GraphQLPreNetworkValidationTests {
     #expect(await transport.requestCount == 0, "\(name) must not reach the network")
   }
 
+  /// A credential provider that fails the way an unconfigured machine does.
+  private struct UnconfiguredCredentials: CredentialProvider {
+    let attempts: Counter
+
+    func credential() async throws -> ResolvedCredential {
+      attempts.increment()
+      throw GatewayError.authentication("No Wrike credential is available.")
+    }
+
+    func refreshedCredential(after stale: ResolvedCredential) async throws -> ResolvedCredential? {
+      nil
+    }
+  }
+
+  @Test(
+    "Argument validation fails before any credential is resolved",
+    arguments: [
+      "{ widget(id: \"\") { id } }",
+      "{ widget(id: 42) { id } }",
+      "{ widgets(page: {pageSize: 100000}) { nodes { id } } }",
+      "{ widget(id: \"1\", bogus: 1) { id } }"
+    ]
+  )
+  func validationPrecedesCredentialResolution(document: String) async throws {
+    let attempts = Counter()
+    let transport = RecordingTransport.succeeding(json: "{}")
+    let registry = try CapabilityRegistry(
+      tier: .writer,
+      definitions: [
+        TransportTestCapabilities.get,
+        TransportTestCapabilities.list,
+        TransportTestCapabilities.create
+      ]
+    )
+    let runtime = GraphQLRuntime(
+      executor: CapabilityExecutor(
+        planner: CapabilityPlanner(registry: registry),
+        transport: transport,
+        credentials: UnconfiguredCredentials(attempts: attempts)
+      )
+    )
+
+    let response = await runtime.execute(document: document)
+    let error = try #require(response.errors.first)
+    #expect(
+      error.code == .validationError,
+      "Expected VALIDATION_ERROR, not \(error.code.rawValue), for \(document)"
+    )
+    #expect(error.exitCode == .usage)
+    #expect(attempts.count == 0, "No credential may be resolved for an invalid argument")
+    #expect(await transport.requestCount == 0)
+  }
+
+  @Test("A scope mismatch is still reported once a credential exists")
+  func scopeCheckStillRuns() async throws {
+    let transport = RecordingTransport.succeeding(json: "{}")
+    let registry = try CapabilityRegistry(
+      tier: .reader,
+      definitions: [TransportTestCapabilities.get]
+    )
+    let runtime = GraphQLRuntime(
+      executor: CapabilityExecutor(
+        planner: CapabilityPlanner(registry: registry),
+        transport: transport,
+        credentials: StubCredentialProvider(grantedScopes: ["amReadOnlyUser"])
+      )
+    )
+
+    let response = await runtime.execute(document: "{ widget(id: \"W1\") { id } }")
+    #expect(response.errors.first?.code == .authorizationFailed)
+    #expect(await transport.requestCount == 0)
+  }
+
   @Test("A declared but unused variable is rejected")
   func rejectsUnusedVariable() async throws {
     let transport = RecordingTransport.succeeding(json: "{}")

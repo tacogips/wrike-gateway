@@ -95,7 +95,7 @@ public struct OAuthLoginFlow: Sendable {
     // Step 3: open the authorization URL. It is never written to stdout,
     // stderr, or logs because it embeds the client id and the OAuth state.
     do {
-      try browser.open(authorizationURL)
+      try await browser.open(authorizationURL)
       trace.browserOpened = true
     } catch {
       _ = try? await callbackTask

@@ -31,11 +31,20 @@ public struct CapabilityExecutor: Sendable {
   }
 
   /// Plans and executes an invocation, returning the full stable result.
+  ///
+  /// Planning runs first and is entirely local, so unsupported fields, unknown
+  /// arguments, malformed identifiers, and oversized page sizes all fail before
+  /// any credential is resolved. The scope check needs the credential, so it
+  /// runs immediately after resolution and still before transport.
   public func execute(
     _ invocation: CapabilityInvocation
   ) async throws -> WrikeValue {
+    let plan = try planner.plan(invocation)
     let credential = try await credentials.credential()
-    let plan = try planner.plan(invocation, grantedScopes: credential.grantedScopes)
+    try planner.validateScopes(
+      for: plan.definition,
+      grantedScopes: credential.grantedScopes
+    )
     return try await execute(plan, credential: credential)
   }
 

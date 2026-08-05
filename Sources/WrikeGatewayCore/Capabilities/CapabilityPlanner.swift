@@ -58,6 +58,13 @@ public struct CapabilityPlanner: Sendable {
   }
 
   /// Plans an invocation into an upstream request.
+  ///
+  /// Every check here is local, so a caller can plan before resolving a
+  /// credential. `grantedScopes` is optional for exactly that reason: the
+  /// executor plans first, then resolves the credential, then calls
+  /// `validateScopes(for:grantedScopes:)`. That ordering is what makes an
+  /// invalid argument report `VALIDATION_ERROR` rather than
+  /// `AUTHENTICATION_FAILED` when no credential is configured.
   public func plan(
     _ invocation: CapabilityInvocation,
     grantedScopes: [String] = []
@@ -84,6 +91,21 @@ public struct CapabilityPlanner: Sendable {
         capabilityID: definition.id
       )
     }
+    try validateScopes(for: definition, grantedScopes: grantedScopes)
+
+    let validated = try coercer.coerce(arguments: invocation.arguments, for: definition)
+    let request = try RequestBuilder.build(definition: definition, arguments: validated)
+    return CapabilityPlan(definition: definition, request: request, validatedArguments: validated)
+  }
+
+  /// Rejects a known scope mismatch before transport.
+  ///
+  /// An empty `grantedScopes` means the credential exposes no inspectable scope
+  /// metadata, as with a permanent token; Wrike stays authoritative in that case.
+  public func validateScopes(
+    for definition: CapabilityDefinition,
+    grantedScopes: [String]
+  ) throws {
     guard definition.scopes.isSatisfied(byGranted: grantedScopes) else {
       throw GatewayError(
         code: .authorizationFailed,
@@ -92,10 +114,6 @@ public struct CapabilityPlanner: Sendable {
         recoveryGuidance: "Re-authorize with the \(definition.scopes.recommended) scope."
       )
     }
-
-    let validated = try coercer.coerce(arguments: invocation.arguments, for: definition)
-    let request = try RequestBuilder.build(definition: definition, arguments: validated)
-    return CapabilityPlan(definition: definition, request: request, validatedArguments: validated)
   }
 }
 

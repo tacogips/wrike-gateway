@@ -143,7 +143,7 @@ public struct StubBrowserOpener: BrowserOpener {
     self.capture = capture
   }
 
-  public func open(_ authorizationURL: SecretValue) throws {
+  public func open(_ authorizationURL: SecretValue) async throws {
     opened.increment()
     capture.record(authorizationURL)
     if shouldFail {

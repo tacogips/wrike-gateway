@@ -94,7 +94,7 @@ public protocol OAuthCallbackListener: Sendable {
 /// The URL is passed as a `SecretValue` because it embeds the client id and the
 /// OAuth state; there is no manual-URL output mode in the initial contract.
 public protocol BrowserOpener: Sendable {
-  func open(_ authorizationURL: SecretValue) throws
+  func open(_ authorizationURL: SecretValue) async throws
 }
 
 public struct SystemBrowserOpener: BrowserOpener {
@@ -104,56 +104,17 @@ public struct SystemBrowserOpener: BrowserOpener {
     self.runner = runner
   }
 
-  public func open(_ authorizationURL: SecretValue) throws {
-    let url = authorizationURL
-    let semaphore = DispatchSemaphore(value: 0)
-    let outcome = LockedBox<Result<ProcessResult, any Error>?>(nil)
-    let runner = self.runner
-    Task.detached {
-      do {
-        let result = try await runner.run(
-          executable: "/usr/bin/open",
-          arguments: ["--background", url.reveal()],
-          standardInput: nil
-        )
-        outcome.set(.success(result))
-      } catch {
-        outcome.set(.failure(error))
-      }
-      semaphore.signal()
-    }
-    semaphore.wait()
-
-    switch outcome.get() {
-    case .success(let result) where result.exitCode == 0:
-      return
-    default:
+  public func open(_ authorizationURL: SecretValue) async throws {
+    let result = try await runner.run(
+      executable: "/usr/bin/open",
+      arguments: ["--background", authorizationURL.reveal()],
+      standardInput: nil
+    )
+    guard result.exitCode == 0 else {
       throw GatewayError.authentication(
         "The system browser could not be opened for authorization.",
         recovery: "Ensure a default browser is configured, then run `auth oauth2` again."
       )
     }
-  }
-}
-
-/// Minimal mutable box used to bridge a detached task result.
-final class LockedBox<Value>: @unchecked Sendable {
-  private let lock = NSLock()
-  private var value: Value
-
-  init(_ value: Value) {
-    self.value = value
-  }
-
-  func set(_ newValue: Value) {
-    lock.lock()
-    value = newValue
-    lock.unlock()
-  }
-
-  func get() -> Value {
-    lock.lock()
-    defer { lock.unlock() }
-    return value
   }
 }
