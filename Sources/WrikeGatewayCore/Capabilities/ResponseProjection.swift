@@ -57,8 +57,7 @@ public enum ResponseProjection {
   /// Builds the full stable result for a capability from a response body.
   public static func result(
     for definition: CapabilityDefinition,
-    body: Data,
-    requestedIdentifier: String?
+    body: Data
   ) throws -> WrikeValue {
     switch definition.result {
     case .single(let shape):
@@ -95,8 +94,10 @@ public enum ResponseProjection {
 
     case .deletion:
       let items = try envelopeData(body, capability: definition.id)
-      let confirmed = confirmedDeletedIdentifier(in: items) ?? requestedIdentifier
-      guard let confirmed else {
+      // The identifier the caller asked to delete is never echoed back as a
+      // confirmation: an empty or unreadable `data` array means Wrike did not
+      // confirm the deletion, which is an outcome-unknown result.
+      guard let confirmed = confirmedDeletedIdentifier(in: items) else {
         throw GatewayError(
           code: .upstreamResponseInvalid,
           message: "Wrike did not confirm which resource was deleted.",

@@ -62,11 +62,7 @@ public struct CapabilityExecutor: Sendable {
     let requestID = requestIDFactory()
     let response = try await send(plan: plan, credential: resolved, requestID: requestID)
     do {
-      return try ResponseProjection.result(
-        for: plan.definition,
-        body: response.body,
-        requestedIdentifier: Self.requestedIdentifier(in: plan)
-      )
+      return try ResponseProjection.result(for: plan.definition, body: response.body)
     } catch let error as GatewayError {
       throw error.withContext(requestID: requestID, capabilityID: plan.capabilityID)
     }
@@ -201,20 +197,5 @@ public struct CapabilityExecutor: Sendable {
       capabilityID: request.capabilityID,
       requestID: requestID
     )
-  }
-
-  /// The identifier a delete operation targeted, used to confirm the outcome
-  /// when Wrike echoes only an entity list.
-  static func requestedIdentifier(in plan: CapabilityPlan) -> String? {
-    guard plan.definition.operationClass == .delete else { return nil }
-    for value in plan.validatedArguments.values {
-      if case .object(let fields) = value {
-        for nested in fields.values {
-          if case .identifier(let identifier) = nested { return identifier.rawValue }
-        }
-      }
-      if case .identifier(let identifier) = value { return identifier.rawValue }
-    }
-    return nil
   }
 }

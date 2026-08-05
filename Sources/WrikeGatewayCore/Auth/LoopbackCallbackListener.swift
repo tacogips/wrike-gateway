@@ -62,8 +62,11 @@ public struct LoopbackCallbackListener: OAuthCallbackListener {
     try await withCheckedThrowingContinuation { continuation in
       let resumed = LockedBox(false)
       let finish: @Sendable (Result<OAuthCallbackRequest, any Error>) -> Void = { result in
-        guard !resumed.get() else { return }
-        resumed.set(true)
+        // A bind failure and a connection failure can arrive concurrently on
+        // the global queue, so the guard must claim the continuation under a
+        // single lock acquisition; a check-then-act pair would let both
+        // callbacks resume it, which traps at runtime.
+        guard resumed.markResumed() else { return }
         continuation.resume(with: result)
       }
 
@@ -147,5 +150,18 @@ final class LockedBox<Value>: @unchecked Sendable {
     lock.lock()
     defer { lock.unlock() }
     return value
+  }
+}
+
+extension LockedBox where Value == Bool {
+  /// Claims the single resume slot. Exactly one caller receives `true`, however
+  /// many threads race, because the read and the write happen under one lock
+  /// acquisition.
+  func markResumed() -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    if value { return false }
+    value = true
+    return true
   }
 }

@@ -179,6 +179,21 @@ struct LoopbackScenarioTests {
     }
   }
 
+  @Test("A 200 delete with an empty data array is outcome-unknown, not a confirmation")
+  func deleteWithEmptyEnvelopeIsUnconfirmed() async throws {
+    try await withServer(responses: [.init(body: "{\"kind\":\"ids\",\"data\":[]}")]) { runtime, server in
+      let response = await runtime.execute(
+        document: "mutation { deleteTask(input: {taskId: \"IEAAAAAAKQAB5FNY\"}) { deletedId } }"
+      )
+
+      let error = try #require(response.errors.first)
+      #expect(error.code == .upstreamResponseInvalid)
+      #expect(error.outcomeUnknown, "An unconfirmed delete must not claim the requested id was deleted")
+      #expect(response.data?["deleteTask"]?["deletedId"] == nil)
+      #expect(server.observedRequests.count == 1, "A delete must never be replayed")
+    }
+  }
+
   @Test("A delete meeting a 500 is outcome-unknown and is not replayed")
   func deleteOutcomeUnknown() async throws {
     try await withServer(responses: [.init(status: 500, body: "{\"error\":\"server_error\"}")]) { runtime, server in

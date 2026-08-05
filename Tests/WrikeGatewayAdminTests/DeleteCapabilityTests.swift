@@ -150,6 +150,21 @@ struct AdminDeleteContractTests {
     )
   }
 
+  @Test("An unconfirmed delete is outcome-unknown, never an echo of the request", arguments: AdminCases.all)
+  func emptyEnvelopeIsOutcomeUnknown(testCase: AdminCase) async throws {
+    let transport = RecordingTransport.succeeding(json: "{\"kind\":\"ids\",\"data\":[]}")
+    let response = await try AdminCases.runtime(transport: transport)
+      .execute(document: testCase.document)
+
+    let error = try #require(response.errors.first, "\(testCase.name)")
+    #expect(error.code == .upstreamResponseInvalid, "\(testCase.name)")
+    #expect(error.outcomeUnknown, "\(testCase.name)")
+    #expect(
+      response.data?[testCase.definition.field]?["deletedId"] == nil,
+      "\(testCase.name) must not report the requested id as deleted"
+    )
+  }
+
   @Test("A delete never retries and never infers success", arguments: AdminCases.all)
   func neverRetriesOrInfersSuccess(testCase: AdminCase) async throws {
     let transport = RecordingTransport(outcomes: [.failure(.connectivity("dropped"))])
