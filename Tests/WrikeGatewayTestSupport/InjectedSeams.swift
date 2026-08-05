@@ -231,7 +231,11 @@ public actor StubProcessRunner: ProcessRunner {
   public struct Invocation: Sendable, Equatable {
     public let executable: String
     public let arguments: [String]
-    public let hadStandardInput: Bool
+    /// Recorded so tests can pin the exact bytes a subcommand receives on
+    /// stdin, not merely that stdin was used.
+    public let standardInput: Data?
+
+    public var hadStandardInput: Bool { standardInput != nil }
   }
 
   private var results: [ProcessResult]
@@ -252,7 +256,7 @@ public actor StubProcessRunner: ProcessRunner {
       Invocation(
         executable: executable,
         arguments: arguments,
-        hadStandardInput: standardInput != nil
+        standardInput: standardInput
       )
     )
     guard !results.isEmpty else {

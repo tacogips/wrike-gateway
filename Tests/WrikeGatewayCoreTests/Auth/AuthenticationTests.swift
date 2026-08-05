@@ -158,9 +158,11 @@ struct AuthenticationPrecedenceTests {
     let third = CredentialRecordKey(clientID: SecretValue("client-a"), host: "app-eu.wrike.com")
     #expect(first.storageName != second.storageName)
     #expect(first.storageName != third.storageName)
-    #expect(first.storageName.hasPrefix("wrike-gateway.oauth."))
+    // kinko accepts only environment-key names, so the namespace separator is
+    // an underscore rather than a dot.
+    #expect(first.storageName.hasPrefix("WRIKE_GATEWAY_OAUTH_"))
     // The client id itself is not embedded in the record name.
-    #expect(!first.storageName.contains("client-a"))
+    #expect(!first.storageName.uppercased().contains("CLIENT_A"))
   }
 
   @Test("Exactly four environment variables are part of the contract")

@@ -22,8 +22,24 @@ public struct CredentialRecordKey: Sendable, Hashable {
     self.host = host.lowercased()
   }
 
+  /// The record name used by the credential store.
+  ///
+  /// kinko 0.1.8 rejects anything that is not a valid environment key
+  /// (`invalid environment key "..."`, exit 1): the first character must be a
+  /// letter or underscore and the rest must be letters, digits, or
+  /// underscores. Dots and hyphens are rejected, so the namespace separator and
+  /// the host are encoded with underscores.
   public var storageName: String {
-    "\(Self.namespace).oauth.\(clientFingerprint).\(host)"
+    let prefix = Self.environmentKeySegment(Self.namespace)
+    return "\(prefix)_OAUTH_\(Self.environmentKeySegment(clientFingerprint))_\(Self.environmentKeySegment(host))"
+  }
+
+  /// Maps one component onto the environment-key character set.
+  static func environmentKeySegment(_ value: String) -> String {
+    let mapped = value.uppercased().map { character -> Character in
+      character.isASCII && (character.isLetter || character.isNumber) ? character : "_"
+    }
+    return String(mapped)
   }
 
   /// A short, stable, non-reversible fingerprint. It exists to separate
