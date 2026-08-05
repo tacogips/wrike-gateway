@@ -39,6 +39,11 @@ tasks:
     cmds:
       - swift test
 
+  test:live:
+    desc: Run the opt-in live Wrike E2E scenarios
+    cmds:
+      - WRIKE_GATEWAY_LIVE_E2E=1 swift test --filter LiveE2EScenarioTests
+
   clean:
     desc: Clean SwiftPM and release artifacts
     cmds:

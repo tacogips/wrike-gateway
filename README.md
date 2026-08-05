@@ -31,6 +31,29 @@ swift run wrike-gateway-reader --help
 swift run wrike-gateway-reader graphql schema
 ```
 
+### End-to-end scenarios
+
+The normal `task test` suite includes the replay E2E runner. It executes the
+shared scenario catalog through a loopback HTTP server with sanitized canned
+responses, requires no Wrike credential, and never changes a Wrike account.
+The live E2E suite is disabled unless `WRIKE_GATEWAY_LIVE_E2E=1` and both
+permanent-token variables are present.
+
+Run the live catalog explicitly through kinko:
+
+```bash
+kinko exec --force \
+  --env WRIKE_GATEWAY_ACCESS_TOKEN,WRIKE_GATEWAY_API_BASE_URL -- \
+  task test:live
+```
+
+The live suite is destructive by design but bounded: it creates one dedicated
+folder named `wrike-gateway verification` under the account root, creates a
+task, comment, optional timelog, and attachment only inside that folder,
+verifies ownership before each delete, and removes the created objects and
+container. It never creates a webhook. A plan- or scope-blocked operation is a
+valid live result and is not replaced with a broader operation.
+
 SwiftPM products:
 
 - Libraries: `WrikeGatewayCore`, `WrikeGatewayRead`, `WrikeGatewayWrite`,
@@ -83,7 +106,7 @@ cause in the error's `recovery` guidance.
 
 ## Credentials
 
-Exactly four environment variables are read:
+Exactly five environment variables are read:
 
 | Variable | Purpose |
 | --- | --- |
@@ -91,6 +114,7 @@ Exactly four environment variables are read:
 | `WRIKE_GATEWAY_API_CLIENT_SECRET` | OAuth2 client secret, exported by kinko |
 | `WRIKE_GATEWAY_ACCESS_TOKEN` | permanent bearer-token alternative |
 | `WRIKE_GATEWAY_API_BASE_URL` | required data-center API base URL in permanent-token mode |
+| `WRIKE_GATEWAY_OAUTH_CALLBACK_PORT` | optional OAuth callback port; defaults to `8765` |
 
 A permanent token takes precedence for the process and requires a validated
 `WRIKE_GATEWAY_API_BASE_URL`; there is no host default and no token-based
