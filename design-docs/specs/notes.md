@@ -60,7 +60,9 @@ All four launch decisions were resolved on 2026-08-05 (user delegated to the
 assistant's recommendation); the answers confirm the conservative defaults:
 
 - OAuth callback: registered TLS loopback
-  `https://localhost:8765/callback`, with no HTTP downgrade or authorization-URL
+  `https://localhost:<port>/callback`, where the port comes from
+  `WRIKE_GATEWAY_OAUTH_CALLBACK_PORT` and defaults to `8765`, with no HTTP
+  downgrade or authorization-URL
   output; the operator provisions one trusted certificate/private-key identity
   in the macOS login Keychain under `wrike-gateway.oauth.localhost`. A future
   release adds an opt-in guided certificate setup command. See

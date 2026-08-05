@@ -46,6 +46,10 @@ public struct OAuthLoginFlow: Sendable {
   private let clock: any GatewayClock
   private let timeoutSeconds: Double
   private let requestedScopes: [String]
+  /// The loopback port the callback service binds for this login. Resolved from
+  /// the environment by the composition root so the redirect URI can match one
+  /// registered for the Wrike application.
+  private let callbackPort: Int
 
   public init(
     client: OAuthClientConfiguration,
@@ -56,8 +60,10 @@ public struct OAuthLoginFlow: Sendable {
     stateGenerator: any StateGenerator = RandomStateGenerator(),
     clock: any GatewayClock = SystemClock(),
     timeoutSeconds: Double = 180,
-    requestedScopes: [String]
+    requestedScopes: [String],
+    callbackPort: Int = WrikeOAuthEndpoints.defaultCallbackPort
   ) {
+    self.callbackPort = callbackPort
     self.client = client
     self.identityLoader = identityLoader
     self.listener = listener
@@ -79,15 +85,19 @@ public struct OAuthLoginFlow: Sendable {
     trace.identityLoaded = true
 
     let state = stateGenerator.makeState()
+    let redirectURI = WrikeOAuthEndpoints.redirectURI(port: callbackPort)
     let authorizationURL = Self.authorizationURL(
       client: client,
       state: state,
-      scopes: requestedScopes
+      scopes: requestedScopes,
+      redirectURI: redirectURI
     )
 
-    // Step 2: bind the loopback listener using the validated identity.
+    // Step 2: bind the loopback listener using the validated identity. The
+    // service lives only for this login and stops when the flow returns.
     async let callbackTask = listener.awaitCallback(
       identity: identity,
+      port: callbackPort,
       timeoutSeconds: timeoutSeconds
     )
     trace.listenerStarted = true
@@ -103,11 +113,15 @@ public struct OAuthLoginFlow: Sendable {
     }
 
     let callback = try await callbackTask
-    let result = try OAuthCallbackValidator.validate(callback, expectedState: state)
+    let result = try OAuthCallbackValidator.validate(
+      callback,
+      expectedState: state,
+      expectedPort: callbackPort
+    )
     let tokenState = try await exchange.exchangeAuthorizationCode(
       result.code,
       client: client,
-      redirectURI: WrikeOAuthEndpoints.redirectURI,
+      redirectURI: redirectURI,
       now: clock.now
     )
     return (tokenState, trace)
@@ -117,13 +131,16 @@ public struct OAuthLoginFlow: Sendable {
   static func authorizationURL(
     client: OAuthClientConfiguration,
     state: SecretValue,
-    scopes: [String]
+    scopes: [String],
+    redirectURI: String = WrikeOAuthEndpoints.redirectURI(
+      port: WrikeOAuthEndpoints.defaultCallbackPort
+    )
   ) -> SecretValue {
     var components = URLComponents(string: WrikeOAuthEndpoints.authorizationURL)
     var items = [
       URLQueryItem(name: "client_id", value: client.clientID.reveal()),
       URLQueryItem(name: "response_type", value: "code"),
-      URLQueryItem(name: "redirect_uri", value: WrikeOAuthEndpoints.redirectURI),
+      URLQueryItem(name: "redirect_uri", value: redirectURI),
       URLQueryItem(name: "state", value: state.reveal())
     ]
     if !scopes.isEmpty {

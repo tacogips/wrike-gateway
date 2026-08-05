@@ -105,13 +105,23 @@ than on the command line. The vault must be unlocked (`kinko unlock`) before an
 OAuth2 credential can be read or written; a locked vault is reported as a locked
 credential store rather than as a missing credential.
 
-`auth oauth2` uses the fixed redirect `https://localhost:8765/callback` and
-requires one valid, trusted certificate/private-key identity in the current
-user's macOS login Keychain under the label `wrike-gateway.oauth.localhost`.
-The operator provisions that identity; the CLI never generates, imports, or
-trusts certificates, and it fails before binding a listener or opening a browser
-when the identity is missing or invalid. There is no redirect-URI, identity
-label, certificate, or trust-bypass override.
+`auth oauth2` redirects to `https://localhost:<port>/callback` and runs a
+loopback callback service on that port for the duration of one login. The port
+defaults to `8765` and is set with `WRIKE_GATEWAY_OAUTH_CALLBACK_PORT`, so the
+redirect URI can match the one registered for your Wrike application:
+
+```bash
+WRIKE_GATEWAY_OAUTH_CALLBACK_PORT=49152 wrike-gateway-reader auth oauth2
+```
+
+The scheme, host, and path are fixed, and an invalid port fails before the
+login starts. The command also requires one valid, trusted
+certificate/private-key identity in the current user's macOS login Keychain
+under the label `wrike-gateway.oauth.localhost`. The operator provisions that
+identity; the CLI never generates, imports, or trusts certificates, and it
+fails before binding a listener or opening a browser when the identity is
+missing or invalid. There is no redirect-URI, host, path, identity label,
+certificate, or trust-bypass override.
 
 ## Homebrew Formula
 

@@ -165,9 +165,26 @@ struct AuthenticationPrecedenceTests {
     #expect(!first.storageName.uppercased().contains("CLIENT_A"))
   }
 
-  @Test("Exactly four environment variables are part of the contract")
+  @Test("Exactly five environment variables are part of the contract")
   func canonicalEnvironmentVariables() {
     #expect(Set(GatewayEnvironmentKey.allCases.map(\.rawValue)) == [
+      "WRIKE_GATEWAY_API_CLIENT_ID",
+      "WRIKE_GATEWAY_API_CLIENT_SECRET",
+      "WRIKE_GATEWAY_ACCESS_TOKEN",
+      "WRIKE_GATEWAY_API_BASE_URL",
+      "WRIKE_GATEWAY_OAUTH_CALLBACK_PORT"
+    ])
+  }
+
+  @Test("Only the four documented variables can carry a credential or an endpoint")
+  func onlyDocumentedVariablesCarryCredentials() {
+    // The callback port is configuration, not a credential and not a Wrike
+    // endpoint: it selects a loopback port and cannot redirect a request or an
+    // authorization code off the machine. Keeping it out of this set is what
+    // stops a new variable from quietly widening the credential surface.
+    let credentialBearing = Set(GatewayEnvironmentKey.allCases.map(\.rawValue))
+      .subtracting(["WRIKE_GATEWAY_OAUTH_CALLBACK_PORT"])
+    #expect(credentialBearing == [
       "WRIKE_GATEWAY_API_CLIENT_ID",
       "WRIKE_GATEWAY_API_CLIENT_SECRET",
       "WRIKE_GATEWAY_ACCESS_TOKEN",

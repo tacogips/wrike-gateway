@@ -13,6 +13,7 @@ public struct LoopbackCallbackListener: OAuthCallbackListener {
 
   public func awaitCallback(
     identity: CallbackTLSIdentityHandle,
+    port callbackPort: Int,
     timeoutSeconds: Double
   ) async throws -> OAuthCallbackRequest {
     guard let payload = identity.payload else {
@@ -31,14 +32,16 @@ public struct LoopbackCallbackListener: OAuthCallbackListener {
     parameters.requiredInterfaceType = .loopback
     parameters.allowLocalEndpointReuse = true
 
-    guard let port = NWEndpoint.Port(rawValue: UInt16(WrikeOAuthEndpoints.callbackPort)) else {
-      throw GatewayError.internalFailure("The fixed callback port is not valid.")
+    guard (1...65535).contains(callbackPort),
+          let port = NWEndpoint.Port(rawValue: UInt16(callbackPort))
+    else {
+      throw GatewayError.internalFailure("The configured callback port is not valid.")
     }
     let listener = try NWListener(using: parameters, on: port)
 
     return try await withThrowingTaskGroup(of: OAuthCallbackRequest.self) { group in
       group.addTask {
-        try await Self.accept(listener: listener)
+        try await Self.accept(listener: listener, port: callbackPort)
       }
       group.addTask {
         try await Task.sleep(nanoseconds: UInt64(max(1, timeoutSeconds) * 1_000_000_000))
@@ -58,7 +61,10 @@ public struct LoopbackCallbackListener: OAuthCallbackListener {
     }
   }
 
-  private static func accept(listener: NWListener) async throws -> OAuthCallbackRequest {
+  private static func accept(
+    listener: NWListener,
+    port callbackPort: Int
+  ) async throws -> OAuthCallbackRequest {
     try await withCheckedThrowingContinuation { continuation in
       let resumed = LockedBox(false)
       let finish: @Sendable (Result<OAuthCallbackRequest, any Error>) -> Void = { result in
@@ -73,8 +79,10 @@ public struct LoopbackCallbackListener: OAuthCallbackListener {
       listener.stateUpdateHandler = { state in
         if case .failed = state {
           finish(.failure(GatewayError.authentication(
-            "The OAuth callback listener could not bind the fixed loopback port.",
-            recovery: "Ensure no other process is using port \(WrikeOAuthEndpoints.callbackPort)."
+            "The OAuth callback listener could not bind the configured loopback port.",
+            recovery: "Ensure no other process is using port \(callbackPort), or set "
+              + "\(GatewayEnvironmentKey.oauthCallbackPort.rawValue) to a free port that "
+              + "matches a redirect URI registered for the Wrike application."
           )))
         }
       }
@@ -96,7 +104,7 @@ public struct LoopbackCallbackListener: OAuthCallbackListener {
             finish(.failure(GatewayError.authentication("The OAuth callback connection failed.")))
             return
           }
-          guard let data, let request = parseRequestLine(data) else {
+          guard let data, let request = parseRequestLine(data, port: callbackPort) else {
             finish(.failure(GatewayError.authentication("The OAuth callback request was unreadable.")))
             return
           }
@@ -109,7 +117,10 @@ public struct LoopbackCallbackListener: OAuthCallbackListener {
 
   /// Extracts only the path and query from the request line. Headers and body
   /// are discarded without inspection.
-  static func parseRequestLine(_ data: Data) -> OAuthCallbackRequest? {
+  static func parseRequestLine(
+    _ data: Data,
+    port callbackPort: Int = WrikeOAuthEndpoints.defaultCallbackPort
+  ) -> OAuthCallbackRequest? {
     guard let text = String(data: data, encoding: .utf8) else { return nil }
     guard let line = text.split(separator: "\r\n", maxSplits: 1).first else { return nil }
     let parts = line.split(separator: " ")
@@ -123,7 +134,7 @@ public struct LoopbackCallbackListener: OAuthCallbackListener {
     }
     return OAuthCallbackRequest(
       host: WrikeOAuthEndpoints.callbackHost,
-      port: WrikeOAuthEndpoints.callbackPort,
+      port: callbackPort,
       path: components.path,
       queryItems: items
     )

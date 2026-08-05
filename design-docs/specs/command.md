@@ -143,9 +143,11 @@ operating-system browser API and never writes that URL, its OAuth state, the
 client id, authorization codes, access tokens, refresh tokens, permanent
 tokens, or client secrets to stdout, stderr, or logs. The initial contract has
 no manual-URL output mode. The redirect URI must use HTTPS, match the Wrike
-application registration, and resolve to the fixed initial loopback listener at
-`https://localhost:8765/callback`. The initial command accepts no redirect URI
-flag or environment override. Before browser launch, it requires one valid,
+application registration, and resolve to the loopback callback service at
+`https://localhost:<port>/callback`. The port comes from
+`WRIKE_GATEWAY_OAUTH_CALLBACK_PORT` and defaults to `8765`; the scheme, host,
+and path are fixed, and no flag carries any of them. The service is bound only
+for the duration of one login. Before browser launch, it requires one valid,
 trusted certificate/private-key identity in the current user's macOS login
 Keychain under the fixed label `wrike-gateway.oauth.localhost`. Missing or
 invalid identity state fails with exit code `3`; the command does not generate,

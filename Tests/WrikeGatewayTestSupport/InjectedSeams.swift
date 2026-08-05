@@ -109,17 +109,27 @@ public struct StubCallbackListener: OAuthCallbackListener {
 
   private let behavior: Behavior
   public let started: Counter
+  /// The port the flow asked the listener to bind, so a test can prove the
+  /// configured port reached the service rather than only the redirect URI.
+  public let boundPorts: PortRecorder
 
-  public init(_ behavior: Behavior, started: Counter = Counter()) {
+  public init(
+    _ behavior: Behavior,
+    started: Counter = Counter(),
+    boundPorts: PortRecorder = PortRecorder()
+  ) {
     self.behavior = behavior
     self.started = started
+    self.boundPorts = boundPorts
   }
 
   public func awaitCallback(
     identity: CallbackTLSIdentityHandle,
+    port: Int,
     timeoutSeconds: Double
   ) async throws -> OAuthCallbackRequest {
     started.increment()
+    boundPorts.record(port)
     switch behavior {
     case .callback(let request):
       return request
@@ -156,6 +166,26 @@ public struct StubBrowserOpener: BrowserOpener {
 }
 
 /// Thread-safe call counter for asserting that a side effect did not happen.
+/// Records the ports a listener was asked to bind.
+public final class PortRecorder: @unchecked Sendable {
+  private let lock = NSLock()
+  private var values: [Int] = []
+
+  public init() {}
+
+  public func record(_ port: Int) {
+    lock.lock()
+    values.append(port)
+    lock.unlock()
+  }
+
+  public var ports: [Int] {
+    lock.lock()
+    defer { lock.unlock() }
+    return values
+  }
+}
+
 public final class Counter: @unchecked Sendable {
   private let lock = NSLock()
   private var value = 0

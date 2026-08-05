@@ -41,6 +41,7 @@ permissions of a Wrike token or bypass Wrike scopes.
 | `WRIKE_GATEWAY_API_CLIENT_SECRET` | OAuth2 application client secret, exported by kinko | yes |
 | `WRIKE_GATEWAY_ACCESS_TOKEN` | permanent bearer-token alternative | yes |
 | `WRIKE_GATEWAY_API_BASE_URL` | required data-center API base URL for permanent-token mode | no, but validate host |
+| `WRIKE_GATEWAY_OAUTH_CALLBACK_PORT` | loopback port the OAuth callback service binds; defaults to `8765` | no |
 
 OAuth access tokens, refresh tokens, expiry, scopes, and resolved host are
 credential-store records, not general environment variables. They are never
@@ -82,12 +83,27 @@ approved-host policy. A missing or invalid base URL fails locally with
    data-center host atomically through the credential store.
 8. Clear transient code and state values from memory as soon as practical.
 
-The initial redirect is fixed at `https://localhost:8765/callback`, matching
-Wrike's HTTPS requirement for registered redirect URIs and its localhost
-guidance. The URI must match one registered for the Wrike application. The
-initial contract accepts no redirect URI flag or environment override. If the
-browser cannot be opened, the command fails with safe guidance rather than
-printing the URL, because the URL contains the client id and OAuth state.
+The redirect is `https://localhost:<port>/callback`, matching Wrike's HTTPS
+requirement for registered redirect URIs and its localhost guidance. The URI
+must match one registered for the Wrike application.
+
+The scheme, host, and path are fixed; only the port is configurable, through
+`WRIKE_GATEWAY_OAUTH_CALLBACK_PORT`, defaulting to `8765`. The registered
+redirect URI differs per Wrike application, so a fixed port made the flow
+unusable against an application registered on another port. Because only the
+port varies, no configuration can send an authorization code anywhere but an
+HTTPS loopback listener on this machine. There is still no redirect URI, host,
+or path override, and no CLI flag carries any of them.
+
+A malformed or out-of-range port fails locally, at composition, before the
+identity check or any listener binding, rather than silently reverting to the
+default: a service listening on a port the operator did not intend cannot
+receive the redirect, and the reason would not be obvious.
+
+The callback service is bound only for the duration of one login and stops when
+the flow returns. If the browser cannot be opened, the command fails with safe
+guidance rather than printing the URL, because the URL contains the client id
+and OAuth state.
 
 ## OAuth Callback TLS Identity
 

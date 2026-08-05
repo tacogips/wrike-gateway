@@ -36,12 +36,13 @@ public struct OAuthCallbackRequest: Sendable, Equatable {
 public enum OAuthCallbackValidator {
   public static func validate(
     _ request: OAuthCallbackRequest,
-    expectedState: SecretValue
+    expectedState: SecretValue,
+    expectedPort: Int = WrikeOAuthEndpoints.defaultCallbackPort
   ) throws -> OAuthCallbackResult {
     guard request.host.lowercased() == WrikeOAuthEndpoints.callbackHost else {
       throw GatewayError.authentication("The OAuth callback arrived on an unexpected host.")
     }
-    guard request.port == WrikeOAuthEndpoints.callbackPort else {
+    guard request.port == expectedPort else {
       throw GatewayError.authentication("The OAuth callback arrived on an unexpected port.")
     }
     guard request.path == WrikeOAuthEndpoints.callbackPath else {
@@ -82,9 +83,11 @@ public enum OAuthCallbackValidator {
 /// fixed HTTPS port using the Keychain identity; tests substitute a listener
 /// that replays a canned callback.
 public protocol OAuthCallbackListener: Sendable {
-  /// Binds the listener and waits for one callback, or throws on timeout.
+  /// Binds the listener on `port` and waits for one callback, or throws on
+  /// timeout. The service exists only for the duration of one login.
   func awaitCallback(
     identity: CallbackTLSIdentityHandle,
+    port: Int,
     timeoutSeconds: Double
   ) async throws -> OAuthCallbackRequest
 }

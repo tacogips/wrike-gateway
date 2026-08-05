@@ -31,13 +31,43 @@ public enum WrikeOAuthEndpoints {
   public static let authorizationURL = "https://login.wrike.com/oauth2/authorize/v4"
   public static let tokenURL = "https://login.wrike.com/oauth2/token"
 
-  /// The fixed initial redirect URI. There is deliberately no flag or
-  /// environment override; `design-docs/user-qa/pending-oauth-callback.md`
-  /// tracks making it configurable.
-  public static let redirectURI = "https://localhost:8765/callback"
   public static let callbackHost = "localhost"
-  public static let callbackPort = 8765
   public static let callbackPath = "/callback"
+
+  /// The port the loopback callback service listens on when nothing overrides
+  /// it.
+  public static let defaultCallbackPort = 8765
+
+  /// The redirect URI for a given callback port.
+  public static func redirectURI(port: Int) -> String {
+    "https://\(callbackHost):\(port)\(callbackPath)"
+  }
+
+  /// Resolves the callback port from the environment, falling back to the
+  /// default.
+  ///
+  /// A malformed or out-of-range value fails locally rather than silently
+  /// reverting to the default, because a login that listens on a port the
+  /// operator did not intend cannot receive the redirect and the reason would
+  /// not be obvious.
+  public static func resolveCallbackPort(
+    from environment: any EnvironmentReader
+  ) throws -> Int {
+    guard let raw = environment.value(for: .oauthCallbackPort)?
+      .trimmingCharacters(in: .whitespaces), !raw.isEmpty
+    else {
+      return defaultCallbackPort
+    }
+    guard let port = Int(raw), (1...65535).contains(port) else {
+      throw GatewayError.authentication(
+        "The configured OAuth callback port is not a valid TCP port.",
+        recovery: "Set \(GatewayEnvironmentKey.oauthCallbackPort.rawValue) to a number between "
+          + "1 and 65535, matching the redirect URI registered for the Wrike application, "
+          + "or unset it to use \(defaultCallbackPort)."
+      )
+    }
+    return port
+  }
 
   /// The fixed macOS login-Keychain application label for the callback identity.
   public static let callbackIdentityLabel = "wrike-gateway.oauth.localhost"

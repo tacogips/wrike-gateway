@@ -30,7 +30,7 @@ private struct FlowHarness {
     code: String? = "fake-authorization-code",
     error: String? = nil,
     host: String = WrikeOAuthEndpoints.callbackHost,
-    port: Int = WrikeOAuthEndpoints.callbackPort,
+    port: Int = WrikeOAuthEndpoints.defaultCallbackPort,
     path: String = WrikeOAuthEndpoints.callbackPath
   ) -> OAuthCallbackRequest {
     var items = [WrikeQueryItem(name: "state", value: state)]
@@ -43,12 +43,14 @@ private struct FlowHarness {
     identity: StubIdentityLoader.Behavior,
     listener: StubCallbackListener.Behavior,
     browserFails: Bool = false,
-    capture: SecretCapture = SecretCapture()
+    capture: SecretCapture = SecretCapture(),
+    callbackPort: Int = WrikeOAuthEndpoints.defaultCallbackPort,
+    boundPorts: PortRecorder = PortRecorder()
   ) throws -> OAuthLoginFlow {
     OAuthLoginFlow(
       client: Self.client,
       identityLoader: StubIdentityLoader(identity),
-      listener: StubCallbackListener(listener, started: listenerStarts),
+      listener: StubCallbackListener(listener, started: listenerStarts, boundPorts: boundPorts),
       browser: StubBrowserOpener(opened: browserOpens, shouldFail: browserFails, capture: capture),
       exchange: try OAuthTokenExchange(
         transport: transport,
@@ -57,7 +59,8 @@ private struct FlowHarness {
       ),
       stateGenerator: FixedStateGenerator(),
       clock: clock,
-      requestedScopes: ["wsReadOnly"]
+      requestedScopes: ["wsReadOnly"],
+      callbackPort: callbackPort
     )
   }
 }
@@ -227,25 +230,78 @@ struct OAuthLoopbackCallbackTests {
     #expect("\(secret)" == SecretValue.placeholder)
   }
 
-  @Test("The redirect URI is fixed and accepts no flag or environment override")
-  func redirectURIIsFixed() throws {
-    #expect(WrikeOAuthEndpoints.redirectURI == "https://localhost:8765/callback")
-    let components = try #require(
-      WrikeOAuthEndpoints.components(ofRedirectURI: WrikeOAuthEndpoints.redirectURI)
+  @Test("The redirect URI host and path are fixed, and only the port is configurable")
+  func redirectURIShape() throws {
+    let defaultURI = WrikeOAuthEndpoints.redirectURI(
+      port: WrikeOAuthEndpoints.defaultCallbackPort
     )
+    #expect(defaultURI == "https://localhost:8765/callback")
+
+    let components = try #require(WrikeOAuthEndpoints.components(ofRedirectURI: defaultURI))
     #expect(components.host == "localhost")
     #expect(components.port == 8765)
     #expect(components.path == "/callback")
 
-    // No environment variable in the contract can influence the callback.
+    // A configured port changes only the port. The scheme stays HTTPS and the
+    // host stays loopback, so no configuration can redirect a code off-machine.
+    let configured = try #require(
+      WrikeOAuthEndpoints.components(ofRedirectURI: WrikeOAuthEndpoints.redirectURI(port: 49152))
+    )
+    #expect(configured.host == "localhost")
+    #expect(configured.port == 49152)
+    #expect(configured.path == "/callback")
+
+    // The port is the only callback-shaped variable in the contract.
     let names = Set(GatewayEnvironmentKey.allCases.map(\.rawValue))
-    #expect(!names.contains { $0.contains("REDIRECT") || $0.contains("CALLBACK") })
+    #expect(!names.contains { $0.contains("REDIRECT") })
+    #expect(
+      names.filter { $0.contains("CALLBACK") } == [
+        GatewayEnvironmentKey.oauthCallbackPort.rawValue
+      ]
+    )
 
     // Every override-shaped flag is rejected by the shared parser.
     for flag in CommandParser.forbiddenFlags {
       #expect(throws: GatewayError.self) {
         _ = try CommandParser.parse(["graphql", "schema", flag, "value"])
       }
+    }
+  }
+
+  @Test("The configured port reaches the callback service and the token exchange")
+  func configuredPortReachesTheFlow() async throws {
+    let harness = FlowHarness()
+    let boundPorts = PortRecorder()
+    let flow = try harness.flow(
+      identity: .valid,
+      listener: .callback(FlowHarness.callback(port: 49152)),
+      callbackPort: 49152,
+      boundPorts: boundPorts
+    )
+
+    _ = try await flow.authorize()
+
+    #expect(boundPorts.ports == [49152], "The service must bind the configured port")
+    let exchange = try #require(await harness.transport.requests.last)
+    #expect(
+      exchange.bodyDescription.contains("49152"),
+      "The token exchange must reuse the redirect URI the authorization used"
+    )
+    #expect(!exchange.bodyDescription.contains("8765"))
+  }
+
+  @Test("A callback arriving on a port other than the configured one is refused")
+  func callbackOnAnotherPortIsRefused() async throws {
+    let harness = FlowHarness()
+    // The service is configured for 49152; the callback claims the old default.
+    let flow = try harness.flow(
+      identity: .valid,
+      listener: .callback(FlowHarness.callback(port: 8765)),
+      callbackPort: 49152
+    )
+
+    await #expect(throws: GatewayError.self) {
+      _ = try await flow.authorize()
     }
   }
 

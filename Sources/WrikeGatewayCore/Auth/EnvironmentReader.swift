@@ -7,6 +7,10 @@ public enum GatewayEnvironmentKey: String, Sendable, CaseIterable {
   case clientSecret = "WRIKE_GATEWAY_API_CLIENT_SECRET"
   case accessToken = "WRIKE_GATEWAY_ACCESS_TOKEN"
   case apiBaseURL = "WRIKE_GATEWAY_API_BASE_URL"
+  /// The port the OAuth callback service listens on. Not a secret: the
+  /// redirect URI must match one registered for the Wrike application, and the
+  /// registered port differs per deployment.
+  case oauthCallbackPort = "WRIKE_GATEWAY_OAUTH_CALLBACK_PORT"
 }
 
 /// Injected environment access.
