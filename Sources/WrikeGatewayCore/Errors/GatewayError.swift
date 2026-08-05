@@ -59,6 +59,26 @@ public struct GatewayError: Error, Sendable, Equatable {
     return .object(fields)
   }
 
+  /// Returns a copy carrying capability-specific recovery guidance.
+  ///
+  /// Guidance the error already carries always wins: a mapped upstream error
+  /// that already explains its own remedy must not have it replaced by a
+  /// capability's more general hint.
+  public func withRecoveryGuidance(_ guidance: String?) -> GatewayError {
+    guard recoveryGuidance == nil, let guidance else { return self }
+    return GatewayError(
+      code: code,
+      message: message,
+      requestID: requestID,
+      httpStatus: httpStatus,
+      capabilityID: capabilityID,
+      requiredTier: requiredTier,
+      outcomeUnknown: outcomeUnknown,
+      retryAfterSeconds: retryAfterSeconds,
+      recoveryGuidance: guidance
+    )
+  }
+
   /// Returns a copy carrying request correlation context added by the executor.
   public func withContext(requestID: String?, capabilityID: CapabilityID?) -> GatewayError {
     GatewayError(

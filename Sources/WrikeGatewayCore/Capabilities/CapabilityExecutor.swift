@@ -135,7 +135,7 @@ public struct CapabilityExecutor: Sendable {
           capability: plan.capabilityID,
           requestID: requestID,
           method: plan.request.method
-        )
+        ).withRecoveryGuidance(plan.definition.rejectionGuidance(for: outcome.code))
       }
 
       return response

@@ -168,6 +168,14 @@ public struct CapabilityDefinition: Sendable, Equatable {
   public let status: CapabilityStatus
   /// Documentation string printed in the role schema.
   public let summary: String
+  /// Non-secret guidance for an upstream refusal a caller cannot diagnose from
+  /// the stable error code alone.
+  ///
+  /// It exists for the case where Wrike's refusal is expected and structural
+  /// rather than a caller mistake, such as asking for a preview of a type that
+  /// has none: the code is correct, but on its own it reads as a missing
+  /// attachment. It never replaces guidance the mapped error already carries.
+  public let upstreamRejectionGuidance: String?
 
   public init(
     id: CapabilityID,
@@ -182,7 +190,8 @@ public struct CapabilityDefinition: Sendable, Equatable {
     scopes: ScopeRequirement,
     maximumPageSize: Int? = nil,
     status: CapabilityStatus = .implemented,
-    summary: String
+    summary: String,
+    upstreamRejectionGuidance: String? = nil
   ) {
     self.id = id
     self.field = field
@@ -197,9 +206,24 @@ public struct CapabilityDefinition: Sendable, Equatable {
     self.maximumPageSize = maximumPageSize
     self.status = status
     self.summary = summary
+    self.upstreamRejectionGuidance = upstreamRejectionGuidance
   }
 
   public var isDestructive: Bool { operationClass == .delete }
+
+  /// The guidance to attach to a mapped upstream error, if any.
+  ///
+  /// It applies only to the codes that mean Wrike itself refused the request.
+  /// A credential, rate-limit, or availability failure has nothing to do with
+  /// what the capability asked for, and already carries its own remedy.
+  func rejectionGuidance(for code: GatewayErrorCode) -> String? {
+    switch code {
+    case .notFound, .validationError:
+      return upstreamRejectionGuidance
+    default:
+      return nil
+    }
+  }
 
   public func argument(named name: String) -> ArgumentDefinition? {
     arguments.first { $0.name == name }

@@ -150,7 +150,13 @@ public enum AttachmentCapabilities {
     result: .fileOutput(FileOutputShape.shape),
     scopes: .workspaceRead,
     summary: "Downloads one attachment's preview to destination. "
-      + "The path must not already exist; an existing file is never replaced."
+      + "The path must not already exist; an existing file is never replaced.",
+    // A preview-less attachment type is refused upstream exactly as a missing
+    // attachment is, so the stable code alone sends an operator looking for a
+    // wrong identifier. Naming the second cause, and the route that always has
+    // content, is the difference between a dead end and a next step.
+    upstreamRejectionGuidance: "Wrike refused this preview. Not every attachment type has one; "
+      + "use attachmentDownload for the original content, or attachment to check the type."
   )
 
   public static let all: [CapabilityDefinition] = [list, get, url, download, preview]
