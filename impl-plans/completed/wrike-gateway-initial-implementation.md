@@ -1,6 +1,6 @@
 # Wrike Gateway Initial Implementation
 
-**Status**: In Progress
+**Status**: Completed
 **Design Reference**: `design-docs/specs/architecture.md#swiftpm-target-layout`,
 `design-docs/specs/architecture.md#request-data-flow`,
 `design-docs/specs/command.md#common-command-surface`,
@@ -385,7 +385,7 @@ package files are reserved for TASK-006.
 
 **Completion Criteria**:
 
-- [ ] All assigned work-hierarchy matrix rows have typed SDK and Query coverage
+- [x] All assigned work-hierarchy matrix rows have typed SDK and Query coverage
       across the eight resource adapter namespaces, matching verified
       capability ids.
 - [x] Reader adapters use only GET-backed reviewed operations.
@@ -435,7 +435,7 @@ package files are reserved for TASK-006.
 
 **Completion Criteria**:
 
-- [ ] All six assigned resource families have typed SDK and Query coverage
+- [x] All six assigned resource families have typed SDK and Query coverage
       matching verified capability ids.
 - [x] Reader behavior performs no create, update, delete, upload, or webhook
       state change.
@@ -700,7 +700,7 @@ behavior rather than planned behavior.
 - [x] Documentation states only behavior demonstrated by tests.
 - [x] Pending user decisions remain visible and use the repository format.
 - [x] The progress log contains dated results for every verification command.
-- [ ] The plan moves to `impl-plans/completed/` only after all global criteria
+- [x] The plan moves to `impl-plans/completed/` only after all global criteria
       are satisfied.
 
 ## Dependency Graph
@@ -773,7 +773,13 @@ TASK-001
       at `kinko version` 0.1.8, replayed through the installed binary by an
       opt-in test, and round-tripped by `KinkoRoundTripTests`
       (`WRIKE_GATEWAY_KINKO_ROUNDTRIP=1`) against a real unlocked vault for
-      load, replace, rotation, delete, and repeated delete. The live Wrike
+      load, replace, rotation, delete, and repeated delete. The store-level
+      classification of an unreadable vault is enforced end to end rather than
+      only at the store: `CredentialResolver.status` and `.logout` both
+      propagate it, and `AuthCommands.status` and `.logout` both surface it as
+      `FILE_OPERATION_FAILED` with exit `6`, each covered by an end-to-end test
+      against an unavailable store (2026-08-05, see the entry below). The live
+      Wrike
       authorization-code exchange and refresh rotation against
       `login.wrike.com` remain unexercised, since they require an operator
       browser session and a registered OAuth application; that boundary is
@@ -790,7 +796,7 @@ TASK-001
 - [x] `task build`, `task test`, `swift test`, and `swiftlint` pass.
 - [x] No unrelated release, packaging, source, or staged `flake.lock` change is
       included.
-- [ ] Every task has a dated progress entry, checked completion criteria, and
+- [x] Every task has a dated progress entry, checked completion criteria, and
       recorded command results before the plan is marked Completed.
 
 ## Progress Log Expectations
@@ -1162,3 +1168,235 @@ condition.
   attachment binary-transfer rows remain unimplemented with their blocking
   conditions recorded; the two reader-coverage criteria and the lifecycle move
   stay unchecked for that reason.
+
+### 2026-08-05 (session 8): surface store failures on the auth status path
+
+**Finding addressed.** Review F12 (medium). The previous entry fixed the
+classification of an unreadable kinko vault inside `KinkoCredentialStore`, but
+`CredentialResolver.status(hasCallbackIdentity:)` discarded the resulting throw
+with `let state = try? await loadState()`. The signal was destroyed one call
+level above the fix, so `auth status` answered a locked, corrupt, or unreadable
+vault with `mode: null` and exit `0`. `AuthCommands.status()` could not have
+surfaced it in any case, because it never took a throwing path. The defect class
+is the same one F6 and F9 closed on the other two store-reading paths; this was
+the third and last of them. The design doc added in `ee926a7` asserted the
+opposite, which made the documentation wrong as well as the code.
+
+**Live probe that demonstrated it, before the fix.** Against the operator's real
+locked vault (`kinko status --path $HOME --profile default` reports `locked`):
+
+    WRIKE_GATEWAY_API_CLIENT_ID=review-probe-client \
+    WRIKE_GATEWAY_API_CLIENT_SECRET=<redacted> \
+    swift run wrike-gateway-reader auth status
+
+exited `0` and printed
+`{"data":{"callbackIdentityAvailable":false,"clientConfigured":true,"expired":false,"expiresAt":null,"host":null,"mode":null,"refreshStateAvailable":false,"scopes":[]}}`.
+An operator reads that as "no credential is configured" and runs `auth oauth2`,
+burning a fresh authorization on a vault that already holds a valid, rotatable
+refresh token, when the fix is `kinko unlock`.
+
+**After the fix, same probe, same vault:** exit `6` and
+`{"data":null,"errors":[{"extensions":{"code":"FILE_OPERATION_FAILED","recovery":"Run `kinko unlock` (or `kinko init` if no vault exists yet), then retry."},"message":"The credential store is locked."}]}`.
+The probe is read-only: it never unlocks, never mutates, and reveals no secret.
+`kinko status` reported `locked` before and after.
+
+**Exit-code correction.** The 2026-08-05 (session 7) entry above records the
+`auth logout` store-failure test as exiting `4`. That is wrong: `.localResource`
+is `6` per the exit-code table in `design-docs/specs/command.md`, which is what
+the test asserts and what the binary returns. The test was and is correct; only
+the log wording was not.
+
+**Changes.** `Sources/WrikeGatewayCore/Auth/CredentialProvider.swift`:
+`status(hasCallbackIdentity:)` is now `async throws` and calls
+`try await loadState()`. The two answers stay distinct -- `nil` still means no
+access token, no client configuration, or a store that answered and had no
+record, and still produces the `mode: null` report with exit `0`. The same
+function no longer swallows the permanent-token base-URL error (F13, low):
+`try permanentTokenCredential()?.baseURL.host` replaces
+`(try? permanentTokenCredential())?.baseURL.host`, so a missing or rejected
+`WRIKE_GATEWAY_API_BASE_URL` exits `3` with `AUTHENTICATION_FAILED` instead of
+reporting mode `permanentToken` with `host: null` for a configuration that
+cannot serve a single request. `Sources/WrikeGatewayCore/CLI/AuthCommands.swift`:
+`status()` wraps the resolver call in do/catch and maps a caught `GatewayError`
+through the existing `Self.failure(error)`, mirroring `logout()`.
+`CommandFrame.swift:116` needed no change, since `status()` remains
+non-throwing to its caller.
+
+**Tests.** `Tests/WrikeGatewayCLITests/CommandFrameEndToEndTests.swift` gains
+`authStatusSurfacesStoreFailure`, reusing the existing `UnavailableCredentialStore`
+seam that session 7 added and left unused for status. It asserts exit
+`.localResource`, `FILE_OPERATION_FAILED` and `kinko unlock` in the output, and
+the absence of both `"mode":null` and `"refreshStateAvailable":false`, so a
+regression that reports an unavailable store as an empty one fails rather than
+passes. `authStatusSurfacesInvalidBaseURL` covers F13. `authStatusWithoutIdentity`
+and `authStatusPermanentToken` stay green unchanged: permanent-token mode with a
+valid base URL returns before `loadState()` runs.
+
+**Documentation.** `design-docs/specs/design-authentication.md` keeps the
+invariant sentence, which R1 through R3 make true, and adds the fixed list of
+enforcing paths (store `load`/`hasRecord`/`delete`; resolver `loadState`,
+`status`, `logout`; CLI `status`, `logout`) with the rule that no layer on the
+list may use `try?` on a store call, so the next reviewer checks a list instead
+of re-deriving the property. The Redaction section now separates "safe report"
+from "report that always succeeds" and names the two cases reported as errors.
+
+**Verification.** `swift build` pass; `task build` pass; `swift test` and
+`task test` pass with 222 tests in 36 suites (up from 220); `swiftlint` reports
+0 violations in 89 files. `git status --short` shows the pre-existing staged
+`flake.lock` unmodified and untouched.
+
+**Defects fixed from review.** F12 `auth status` reporting an unavailable
+credential store as no credential (medium); F13 `auth status` reporting
+permanent-token mode with a null host for a rejected base URL (low).
+
+**Outstanding work, blocking plan closure.** Unchanged: three field-history rows
+and two attachment binary-transfer rows remain unimplemented with their blocking
+conditions recorded; the two reader-coverage criteria and the lifecycle move
+stay unchecked for that reason. **Closed on 2026-08-05 by the entry below.**
+
+### 2026-08-05 (session 9): close the five remaining reader rows and the plan
+
+**What this session closed.** The only work blocking plan closure since session 6
+was the five unimplemented reader rows. Both blocking conditions were resolved
+on their own terms rather than by narrowing the matrix: the three field-history
+routes were located and confirmed in the official reference, and the file-output
+contract the two attachment binary-transfer rows required was designed,
+implemented in core, and tested. Every task box and every global completion
+criterion is now checked, so the plan moves to `impl-plans/completed/`.
+
+**Upstream revalidation (TASK-001 scope, for the five rows only).** The three
+history routes were found through the official reference index at
+`https://developers.wrike.com/llms.txt`, which the earlier sessions had not
+consulted; that index is why they were previously recorded as unconfirmable.
+Each was then read individually and confirmed:
+`GET /contacts/{contactIds}/contacts_history`, kind `contactsHistory`, data
+`ContactChangeHistory{id, billRateHistory, costRateHistory}` over
+`BudgetRateHistoryItem{rateValue, rateSource, startDate, endDate}`, `fields`
+accepting `billRate` and `costRate`;
+`GET /folders/{folderIds}/folders_history`, kind `foldersHistory`, data
+`{id, project{plannedCost, plannedFees, actualCost, actualFees, budget}}`;
+`GET /tasks/{taskIds}/tasks_history`, kind `tasksHistory`, with the same four
+metrics at the top level and no `budget`. All three take an `updatedDate`
+instant range with `start`/`end`, bound each `{...Ids}` path segment at 1000
+entries, and accept scopes Default/wsReadOnly/wsReadWrite.
+`GET /attachments/{attachmentId}/download` and
+`GET /attachments/{attachmentId}/preview` were confirmed to answer with
+`application/octet-stream`, with `preview` accepting exactly
+`w44`, `w100`, `w200`, `w300`, `w400`, `h400`. No route was inferred or
+substituted.
+
+**The file-output contract (new core behavior).** `WrikeRequest` gains a
+`WrikeResponseSink`, `WrikeResponse` gains a `DownloadedFile`, and one core type
+`ResponseSinkDelivery` decides for every transport when a body reaches disk. The
+live `URLSession` transport streams into a temporary file via
+`session.download(for:)` and the test transports hold canned bytes in memory,
+but both call the same delivery, so the tested write rule is the production
+write rule; `ResponseSinkDeliveryTests` asserts the two entry points agree on
+eleven status codes. The rules: only a `2xx` body is content, so a JSON error
+envelope is never written to the caller's path and a refused download leaves no
+file and no temporary file behind; a download never replaces an existing file,
+refused both by local pre-validation and again at the write, so the window
+between them cannot clobber; the file is created `0600`; and the success body is
+never held in a `WrikeResponse`, an error description, or a snapshot. A
+capability declaring a `destinationPath` argument without a `fileOutput` result,
+or the reverse, or an optional destination, or a mutation that writes a file, is
+rejected by `CapabilityRegistry.init`, which runs at binary startup.
+
+**Reader registrations.** `contacts.history`, `folders.history`, and
+`tasks.history` join the eight work-hierarchy namespaces; `attachments.download`
+and `attachments.preview` join the collaboration views. Reader now registers 33
+query fields. Writer and admin are unchanged in their own tiers and remain
+cumulative. Two argument facilities were added because these rows needed them
+and neither existed: `ArgumentValueType.enumerationList`, so `fields` is a
+curated enumeration whose unaccepted value fails locally by name instead of
+becoming an upstream 400; and `ArgumentDefinition.maximumCount`, which enforces
+the documented 1000-entry id bound before an over-long URL is assembled.
+
+**One defect found and fixed in this session's own work.** The schema printer's
+`collectInput` handled `.enumeration` but not `.enumerationList`, so the printed
+reader schema named `ContactHistoryField`, `FolderHistoryField`, and
+`TaskHistoryField` without defining them: an invalid SDL document. The existing
+"printed schema matches the linked capability metadata exactly" test could not
+catch it, because it compares the printer against itself and both sides were
+equally wrong. The printer is fixed and
+`schemaDefinesEveryTypeItNames` now walks every type reference in each binary's
+printed schema and fails on any undefined name. That test was proved
+non-vacuous by temporarily restoring the printer bug: it then failed with the
+three undefined enums on all three binaries, and passed again after the fix was
+restored.
+
+**Changes.** Core: `Transport/WrikeRequest.swift`,
+`Transport/ResponseSinkDelivery.swift` (new),
+`Transport/URLSessionWrikeTransport.swift`,
+`Capabilities/CapabilityDefinition.swift`, `Capabilities/ArgumentCoercion.swift`,
+`Capabilities/CapabilityPlanner.swift`, `Capabilities/ModelShape.swift`,
+`Capabilities/ResponseProjection.swift`, `Capabilities/CapabilityExecutor.swift`,
+`GraphQL/GraphQLSchemaPrinter.swift`, `GraphQL/GraphQLSelectionProjection.swift`.
+Reader: `Schema/HistoryModels.swift` (new), `Contacts/ContactCapabilities.swift`,
+`Contacts/ContactModels.swift`, `Folders/FolderCapabilities.swift`,
+`Tasks/TaskCapabilities.swift`, `Attachments/AttachmentCapabilities.swift`,
+`Schema/WrikeReadClient.swift`. Tests:
+`WrikeGatewayReadTests/FieldHistoryTests.swift` (new),
+`WrikeGatewayReadTests/AttachmentTransferTests.swift` (new),
+`WrikeGatewayCoreTests/Transport/ResponseSinkDeliveryTests.swift` (new),
+`WrikeGatewayCoreTests/Capabilities/FileOutputContractTests.swift` (new),
+`WrikeGatewayReadTests/ReadCapabilityCoverageTests.swift`,
+`WrikeGatewayCLITests/LoopbackScenarioTests.swift`,
+`WrikeGatewayCLITests/BinaryBoundaryTests.swift`,
+`WrikeGatewayCLITests/CommandFrameEndToEndTests.swift`,
+`WrikeGatewayCoreTests/Redaction/RedactionTests.swift`, and the four test-support
+files. Docs: `README.md`, `design-docs/specs/design-capability-matrix.md`,
+`design-docs/specs/design-graphql-contract.md`,
+`design-docs/specs/design-wrike-api-client.md`, and this plan.
+
+**Test coverage added.** Every new capability has recording-transport success and
+failure coverage and SDK/GraphQL planner parity. The envelope harness and the
+file-output harness are kept disjoint by an explicit test, because the envelope
+assertions about `kind` and `data` would pass vacuously against a binary body.
+The three history rows additionally cover the comma-joined path segment, a
+single id, an empty list, exactly 1000 ids, 1001 ids, the JSON-encoded
+`updatedDate` filter, an all-optional range being dropped rather than sent as
+`{}`, a field value accepted for folders and rejected for tasks, both rate
+collections, the folder-only `project` nesting, and a metric missing its
+required window. The two attachment rows additionally cover the write itself,
+`0600` permissions, an upstream failure writing nothing, an existing
+destination, a missing parent, a directory destination, an unaccepted preview
+size, and the absence of bytes from the envelope. Three loopback tests run the
+real `URLSession` transport against the loopback server for a streaming
+download, a refused download, and a preview size on the wire.
+
+**Verification, all passing on 2026-08-05.** `swift build`; `task build`;
+`swift test` and `task test`, 269 tests in 40 suites (up from 222);
+`swiftlint`, 0 violations in 94 files;
+`git diff --check -- design-docs impl-plans Package.swift Sources Tests`;
+`LC_ALL=C rg -n '[^ -~]' design-docs impl-plans`, no matches; `git status
+--short`. Schema comparison across the three binaries: reader 33 queries and 0
+mutations, writer 33 queries and 27 mutations with 0 `delete*` fields, admin 33
+queries and 36 mutations with exactly 9 deletes. `nm` symbol inspection:
+`wrike-gateway-reader` contains 0 `WrikeGatewayWrite` and 0 `WrikeGatewayAdmin`
+symbols, `wrike-gateway-writer` contains 0 `WrikeGatewayAdmin` symbols, and no
+binary contains `WrikeGatewayTestSupport`. Live probes against the built reader
+with no credentials configured: an occupied destination exits `6` with
+`FILE_OPERATION_FAILED` before any credential is resolved; an unaccepted preview
+size and an unaccepted history field each exit `2` with `VALIDATION_ERROR`
+naming the accepted set; a valid, unoccupied destination reaches
+`AUTHENTICATION_FAILED` with exit `3`, and no file was created in any case.
+`git status --short` shows the pre-existing staged `flake.lock` unmodified: it
+still reports 113 insertions and its size and mtime are unchanged from the start
+of the session.
+
+**Capability status changes.** `implemented`: `contacts.history`,
+`folders.history`, `tasks.history`, `attachments.download`,
+`attachments.preview`. No capability remains `planned`. `unsupported` is
+unchanged at `workflows.get` and `users.list`.
+
+**Residual risks, recorded rather than closed.** The live Wrike authorization
+exchange and refresh rotation against `login.wrike.com` remain unexercised, as
+recorded against the auth criterion; they need an operator browser session and a
+registered OAuth application. No capability has been exercised against a real
+Wrike account: every route, envelope kind, and field set is verified against the
+official reference and replayed through canned responses, so a documentation
+error upstream would not be caught here. The gateway does not itself compare a
+download's `Content-Length` against the bytes written; it relies on the
+transport to surface a truncated response as a transport failure, which was not
+exercised because the loopback server always sends the length it declares.

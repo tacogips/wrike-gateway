@@ -31,7 +31,7 @@ validate each row against the current official OpenAPI description.
 | Folders / projects | list tree/search; query by id and field history | create folder/project; copy; bulk update; update | delete folder/project | `folders.list`, `folders.get`, `folders.history`, `folders.create`, `folders.copy`, `folders.update`, `folders.delete`, `projects.list`, `projects.get`, `projects.create`, `projects.update`, `projects.delete` |
 | Tasks | search by account/folder/space; query by ids and field history | create; update; bulk update | delete task | `tasks.list`, `tasks.get`, `tasks.history`, `tasks.create`, `tasks.update`, `tasks.delete` |
 | Comments | list by account/folder/task; query by ids | create on folder/task; update | delete comment | `comments.list`, `comments.get`, `comments.create`, `comments.update`, `comments.delete` |
-| Attachments | list by account/folder/task; query metadata; download, preview, or obtain URL | upload to folder/task; update metadata or version | delete attachment | `attachments.list`, `attachments.get`, `attachments.download`, `attachments.upload`, `attachments.update`, `attachments.delete` |
+| Attachments | list by account/folder/task; query metadata; download, preview, or obtain URL | upload to folder/task; update metadata or version | delete attachment | `attachments.list`, `attachments.get`, `attachments.url`, `attachments.download`, `attachments.preview`, `attachments.upload`, `attachments.update`, `attachments.delete` |
 | Timelogs | list by account/user/folder/task/category; query by ids | create; update | delete timelog | `timelogs.list`, `timelogs.get`, `timelogs.create`, `timelogs.update`, `timelogs.delete` |
 | Custom fields | list by account/space; query by ids | create account custom field; modify | None in v4 baseline | `customFields.list`, `customFields.get`, `customFields.create`, `customFields.update` |
 | Workflows | list account workflows; query by ids | create; modify | None in v4 baseline | `workflows.list`, `workflows.get`, `workflows.create`, `workflows.update` |
@@ -89,8 +89,9 @@ error mapping, and canned-response tests are all present.
 
 ## Implementation Status
 
-Recorded 2026-08-05 after the initial implementation. Upstream routes were
-revalidated against the official Wrike API v4 reference on the same date. Only
+Recorded 2026-08-05 after the initial implementation and updated the same day
+when the five remaining reader rows were implemented. Upstream routes were
+revalidated against the official Wrike API v4 reference on both occasions. Only
 `implemented` capabilities are registered in a role schema; the planner refuses
 to execute anything else, so an unimplemented row cannot be reached at runtime.
 
@@ -98,7 +99,7 @@ to execute anything else, so an unimplemented row cannot be reached at runtime.
 
 | Tier | Capability ids |
 | --- | --- |
-| reader | `contacts.list`, `contacts.get`, `users.get`, `users.types.list`, `groups.list`, `groups.get`, `account.get`, `accessRoles.list`, `spaces.list`, `spaces.get`, `folders.list`, `folders.get`, `projects.list`, `projects.get`, `tasks.list`, `tasks.get`, `comments.list`, `comments.get`, `attachments.list`, `attachments.get`, `attachments.url`, `timelogs.list`, `timelogs.get`, `customFields.list`, `customFields.get`, `workflows.list`, `webhooks.list`, `webhooks.get` |
+| reader | `contacts.list`, `contacts.get`, `contacts.history`, `users.get`, `users.types.list`, `groups.list`, `groups.get`, `account.get`, `accessRoles.list`, `spaces.list`, `spaces.get`, `folders.list`, `folders.get`, `folders.history`, `projects.list`, `projects.get`, `tasks.list`, `tasks.get`, `tasks.history`, `comments.list`, `comments.get`, `attachments.list`, `attachments.get`, `attachments.url`, `attachments.download`, `attachments.preview`, `timelogs.list`, `timelogs.get`, `customFields.list`, `customFields.get`, `workflows.list`, `webhooks.list`, `webhooks.get` |
 | writer | `contacts.update`, `users.update`, `groups.create`, `groups.update`, `account.update`, `spaces.create`, `spaces.update`, `folders.create`, `folders.update`, `folders.copy`, `projects.create`, `projects.update`, `tasks.create`, `tasks.update`, `comments.create`, `comments.update`, `attachments.upload.task`, `attachments.upload.folder`, `attachments.update`, `timelogs.create`, `timelogs.update`, `customFields.create`, `customFields.update`, `workflows.create`, `workflows.update`, `webhooks.create`, `webhooks.update` |
 | admin | `groups.delete`, `spaces.delete`, `folders.delete`, `projects.delete`, `tasks.delete`, `comments.delete`, `attachments.delete`, `timelogs.delete`, `webhooks.delete` |
 
@@ -115,13 +116,15 @@ capabilities with distinct inputs even though both map to `DELETE /folders/{id}`
 
 ### Planned, not yet implemented
 
-These rows remain in the design inventory but are not registered. They are not
-reachable from any binary.
+None. Every row of the accepted matrix is now either implemented or recorded
+above as unsupported upstream.
 
-| Capability id | Blocking condition |
+The five rows that were previously blocked were closed as follows.
+
+| Capability id | How the blocking condition was resolved |
 | --- | --- |
-| `contacts.history`, `folders.history`, `tasks.history` | The field-history operations exist upstream, but their exact route shapes could not be confirmed from the official reference during implementation. Registering an unverified route would violate the rule against substituting an operation. |
-| `attachments.download`, `attachments.preview` | `GET /attachments/{id}/download` returns a binary `application/octet-stream` body, which does not fit the JSON response envelope. A reviewed file-output contract, including destination-path validation and file-operation error mapping, is required first. `attachments.url` covers the reviewed metadata-and-link case in the meantime. |
+| `contacts.history`, `folders.history`, `tasks.history` | The routes were located in the official reference index and confirmed individually: `GET /contacts/{contactIds}/contacts_history`, `GET /folders/{folderIds}/folders_history`, and `GET /tasks/{taskIds}/tasks_history`, each with an `updatedDate` instant range, a resource-specific `fields` selection, a 1000-entry limit on the comma-separated id segment, and the `contactsHistory`/`foldersHistory`/`tasksHistory` envelope kinds. No route was substituted or inferred. |
+| `attachments.download`, `attachments.preview` | The file-output contract the earlier entry required now exists in core: a `destinationPath` argument binding, a `fileOutput` result, and one shared `ResponseSinkDelivery` that both the live and the test transports use. Destination-path validation and file-operation error mapping are specified in `design-wrike-api-client.md#binary-response-bodies`. `GET /attachments/{attachmentId}/download` and `GET /attachments/{attachmentId}/preview` were confirmed individually, including the six curated `size` values. `attachments.url` remains the metadata-and-link case and is unchanged. |
 
 ### Pagination
 

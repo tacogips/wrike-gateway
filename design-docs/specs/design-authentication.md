@@ -213,6 +213,25 @@ Interface constraints that follow from that inventory:
   can never be reported as an empty store. `auth logout` therefore cannot report
   `removedLocalRecord: false` while the record is still stored, and `auth
   status` cannot report "no credential" for a vault that failed to answer.
+
+  That invariant holds only if every layer above the store preserves the throw,
+  so the enforcing paths are named here as a fixed list to check rather than a
+  property to re-derive:
+
+  | Layer | Path | Enforcement |
+  | --- | --- | --- |
+  | Store | `KinkoCredentialStore.load` | `nil` on the missing-record marker alone; throws otherwise |
+  | Store | `KinkoCredentialStore.hasRecord` | `false` on the missing-record marker alone; throws otherwise |
+  | Store | `KinkoCredentialStore.delete` | `false` on the missing-record marker alone; throws otherwise |
+  | Resolver | `CredentialResolver.loadState` | propagates the store throw; returns `nil` only for no client configuration or no record |
+  | Resolver | `CredentialResolver.status(hasCallbackIdentity:)` | `async throws`; a store failure is never mapped to `mode: null` |
+  | Resolver | `CredentialResolver.logout` | `async throws`; a store failure is never mapped to `removedLocalRecord: false` |
+  | CLI | `AuthCommands.status` | catches `GatewayError` and emits the errors envelope with exit `6` |
+  | CLI | `AuthCommands.logout` | catches `GatewayError` and emits the errors envelope with exit `6` |
+
+  No layer on this list may use `try?` on a store call. Doing so restores the
+  defect the store-level classification exists to prevent, one level above the
+  fix and invisible to the store's own tests.
 - `delete` runs as a single command. Because it reports a missing key itself,
   there is no separate existence check and no window between the two in which
   the record can change.
@@ -249,6 +268,18 @@ Redaction happens structurally before formatting. String replacement after a
 message is built is insufficient. Safe auth status contains only mode, host,
 scope names, expiry time/status, and booleans indicating whether refresh state
 or client configuration exists.
+
+A safe report is not the same as a report that always succeeds. `auth status`
+answers only what it actually knows: it reports a state, or it fails naming the
+reason. It never fills an unknown with a benign-looking value. Two cases are
+therefore reported as errors rather than flattened into the report:
+
+- a credential store that cannot be read (see the enforcement table above); and
+- permanent-token mode with a missing or rejected `WRIKE_GATEWAY_API_BASE_URL`,
+  which exits `3` with `AUTHENTICATION_FAILED` instead of reporting mode
+  `permanentToken` with `host: null`. Permanent-token mode has no host default,
+  so that configuration cannot serve a single request; reporting it as usable
+  defers a failure the status command already knows about.
 
 ## Scope Handling
 

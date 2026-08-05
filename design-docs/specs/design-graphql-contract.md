@@ -44,15 +44,16 @@ A mismatch in either direction is an internal error detected by tests.
 
 The initial full design reserves these field families, implemented in phases:
 
-- `contact(id:)`, `contacts(filter:page:)`
+- `contact(id:)`, `contacts(filter:page:)`, `contactsHistory(ids:...)`
 - `user(id:)`, `userTypes`
 - `group(id:)`, `groups(filter:page:)`
 - `account`, `spaces(filter:page:)`, `space(id:)`
 - `folder(id:)`, `folders(scope:filter:page:)`, `project(id:)`,
-  `projects(scope:filter:page:)`
-- `task(id:)`, `tasks(scope:filter:page:)`
+  `projects(scope:filter:page:)`, `foldersHistory(ids:...)`
+- `task(id:)`, `tasks(scope:filter:page:)`, `tasksHistory(ids:...)`
 - `comment(id:)`, `comments(scope:filter:page:)`
-- `attachment(id:)`, `attachments(scope:filter:page:)`
+- `attachment(id:)`, `attachments(scope:filter:page:)`,
+  `attachmentDownload(id:destination:)`, `attachmentPreview(id:destination:size:)`
 - `timelog(id:)`, `timelogs(scope:filter:page:)`
 - `customField(id:)`, `customFields(scope:filter:page:)`
 - `workflow(id:)`, `workflows(filter:page:)`
@@ -60,6 +61,37 @@ The initial full design reserves these field families, implemented in phases:
 
 `scope` is a typed input that selects a reviewed account, space, folder,
 project, task, user, or category relation. It does not accept a path string.
+
+### Field History
+
+The three `*History` fields address several entities through one upstream
+comma-separated path segment, so `ids` is a required `[ID!]` bounded at the
+1000 entries the reference documents. An empty list and an over-long list are
+both validation errors raised before transport, since an empty segment would
+produce a malformed path and an over-long one a request Wrike refuses.
+
+`updatedDate` is an `InstantRangeInput` sent as a JSON document in one query
+parameter. Both bounds are optional and are passed through verbatim as the
+opaque timestamp strings Wrike documents; a range with neither bound carries no
+filter and is dropped rather than sent as `{}`.
+
+`fields` is a curated enumeration list, and the accepted values differ per
+resource: `ContactHistoryField` is `billRate` and `costRate`;
+`FolderHistoryField` adds `budget` to the four budget metrics; and
+`TaskHistoryField` has the four metrics without `budget`, because tasks carry no
+budget. An unaccepted value fails locally and names the accepted set instead of
+becoming an upstream 400.
+
+### File Output
+
+`attachmentDownload` and `attachmentPreview` are the only fields whose upstream
+body is content rather than metadata. They take a required `destination` path
+and return the shared `DownloadedFile` type, which carries `path`, `byteCount`,
+and `contentType` and nothing else. The bytes go to the destination file and to
+no other place; the JSON envelope, error messages, and snapshots describe the
+file only. Destination validation, the refusal to overwrite, and the refusal to
+write an error body are specified in
+`design-wrike-api-client.md#binary-response-bodies`.
 
 Wrike API v4 has no reviewed paginated user-list operation in the Users
 resource family. Account people remain available through `contacts` with a

@@ -34,8 +34,9 @@ scopes, fields, and plan restrictions can change.
 `WrikeGatewayCore` owns the protocol boundary with these conceptual values:
 
 - request: method, relative path, ordered query items, headers, body kind,
-  timeout, and stable capability id;
-- response: HTTP status, normalized headers, and response bytes;
+  timeout, stable capability id, and response sink;
+- response: HTTP status, normalized headers, response bytes, and the written
+  file description when the request selected a file sink;
 - failure: cancelled, timed out, connectivity, TLS, malformed response, or
   local I/O.
 
@@ -69,6 +70,40 @@ Models preserve unknown future fields by ignoring them during decoding, but
 public projection exposes only registered stable fields. Wrike identifiers are
 opaque strings. Date/time values are decoded as ISO-8601 instants or explicit
 calendar dates according to the endpoint contract.
+
+### Binary Response Bodies
+
+`GET /attachments/{attachmentId}/download` and
+`GET /attachments/{attachmentId}/preview` answer with an
+`application/octet-stream` body, which has no place in the `kind`/`data`
+envelope. These are the only two routes with that shape, and they are handled
+by a response sink rather than by a second decoding path:
+
+- A capability declares a required `destinationPath`-bound argument and a
+  `fileOutput` result. Declaring one without the other is a registry coherence
+  failure, so a sink can never be selected without a result that describes it,
+  and no mutation may write a local file.
+- The destination is validated locally before the request is planned. An
+  existing path, a directory, a missing parent directory, and a non-writable
+  parent are each reported as `FILE_OPERATION_FAILED` with exit `6`, and no
+  credential is resolved and no request is sent.
+- Only a `2xx` body is content. A `4xx`/`5xx` body is the documented JSON error
+  envelope, so it stays in memory for the error mapper and is never written to
+  the caller's path. A refused download leaves no file behind, including no
+  temporary file.
+- A download never replaces an existing file. The local pre-check and the write
+  itself both refuse, so a file that appears in the window between them is still
+  not clobbered.
+- The written file is created with `0600` permissions.
+- The success body is never held in a `WrikeResponse`, an error description, a
+  log line, or a snapshot. The response carries the path, the byte count, and
+  the upstream content type only.
+
+One core type, `ResponseSinkDelivery`, makes this decision for every transport.
+The live `URLSession` transport streams into a temporary file and the test
+transports hold canned bytes in memory, but both call the same delivery, so the
+write rule under test is the write rule in production. A test asserts the two
+entry points agree on every status code.
 
 ## Pagination
 

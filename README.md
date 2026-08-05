@@ -55,6 +55,24 @@ are `0` success, `2` usage or local validation, `3` credential, `4` rejected
 request or not found, `5` rate limit or transient upstream, `6` local file or
 credential store, `70` unexpected internal failure.
 
+### Attachment content
+
+Two reader fields write a file instead of returning data:
+
+```bash
+wrike-gateway-reader graphql query \
+  'query { attachmentDownload(id: "IEAAAAAAIYAAAAAB", destination: "/tmp/brief.pdf")
+           { path byteCount contentType } }'
+```
+
+The destination must not already exist: a download never replaces a local file,
+and an upstream failure writes nothing at all. The result describes the written
+file; attachment content never appears in the JSON envelope, an error message,
+or a log line. `attachmentPreview` takes the same arguments plus an optional
+`size` from the curated set `w44`, `w100`, `w200`, `w300`, `w400`, `h400`.
+`attachmentDownloadUrl` remains available when a time-limited URL is wanted
+instead of a transfer.
+
 ## Credentials
 
 Exactly four environment variables are read:
