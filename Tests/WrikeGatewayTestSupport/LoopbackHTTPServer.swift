@@ -27,6 +27,9 @@ public final class LoopbackHTTPServer: @unchecked Sendable {
     public let target: String
     public let headerNames: [String]
     public let hasAuthorizationHeader: Bool
+    /// The only header value retained by the test server. Authorization and
+    /// every other header value remain intentionally unobservable.
+    public let uploadFileName: String?
     public let contentLength: Int
   }
 
@@ -141,6 +144,7 @@ public final class LoopbackHTTPServer: @unchecked Sendable {
 
     var headerNames: [String] = []
     var hasAuthorization = false
+    var uploadFileName: String?
     var contentLength = 0
     for line in lines.dropFirst() {
       guard let colon = line.firstIndex(of: ":") else { continue }
@@ -148,6 +152,7 @@ public final class LoopbackHTTPServer: @unchecked Sendable {
       let value = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
       headerNames.append(name)
       if name == "authorization" { hasAuthorization = true }
+      if name == "x-file-name" { uploadFileName = value }
       if name == "content-length" { contentLength = Int(value) ?? 0 }
     }
 
@@ -157,6 +162,7 @@ public final class LoopbackHTTPServer: @unchecked Sendable {
         target: String(parts[1]),
         headerNames: headerNames.sorted(),
         hasAuthorizationHeader: hasAuthorization,
+        uploadFileName: uploadFileName,
         contentLength: contentLength
       ),
       separator.upperBound - buffer.startIndex

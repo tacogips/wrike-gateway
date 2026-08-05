@@ -264,6 +264,8 @@ struct LoopbackScenarioTests {
       let observed = try #require(server.observedRequests.first)
       #expect(observed.method == "POST")
       #expect(observed.contentLength == payload.count, "The whole file must reach the server")
+      #expect(observed.uploadFileName == "brief.pdf")
+      #expect(observed.uploadFileName?.contains("filename=") == false)
 
       // The rendered envelope carries metadata only, never file bytes.
       let rendered = response.rendered(pretty: false)

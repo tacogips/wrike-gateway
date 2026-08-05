@@ -103,7 +103,7 @@ public final class URLSessionWrikeTransport: NSObject, WrikeTransport, @unchecke
     var uploadRequest = request
     uploadRequest.setValue(upload.contentType, forHTTPHeaderField: "Content-Type")
     uploadRequest.setValue(
-      "attachment; filename=\"\(Self.sanitizedFileName(upload.fileName))\"",
+      Self.sanitizedFileName(upload.fileName),
       forHTTPHeaderField: "X-File-Name"
     )
     let fileURL = URL(fileURLWithPath: upload.path)
