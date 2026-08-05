@@ -819,11 +819,13 @@ condition.
 - 2026-08-05: Implementation session. TASK-001 through TASK-009 executed;
   TASK-010 executed except for the lifecycle move, which is deliberately not
   taken (see the outstanding work below). Commits `7af18c4` (package graph,
-  core runtime, three tiers, three executables) and `6209c03` (five test
-  targets plus the test-only support library, and two defects those tests
-  found). `git status --short` confirms the pre-existing staged `flake.lock`
-  is still staged and unmodified; every commit used path-scoped `git add`
-  limited to `Package.swift`, `Sources`, and `Tests`.
+  core runtime, three tiers, three executables), `6209c03` (five test targets
+  plus the test-only support library, and two defects those tests found),
+  `8255f9b` (documentation and this log), and `94995b5` (a third defect found
+  in diff self-review). `git status --short` confirms the pre-existing staged
+  `flake.lock` is still staged and unmodified; every commit used path-scoped
+  `git add` limited to `Package.swift`, `Sources`, `Tests`, `README.md`,
+  `Taskfile.yml`, `design-docs`, and `impl-plans`.
 
   **TASK-001 (upstream revalidation).** Wrike API v4 was re-checked against the
   official developer documentation on 2026-08-05. Directly confirmed:
@@ -882,11 +884,22 @@ condition.
   type-name filter such as `swift test --filter ReaderCapabilityContractTests`,
   or run `swift test` for the whole suite.
 
-  **Two defects the tests found and fixed.** `RequestBuilder` used `continue`
-  inside a `switch` in a `for` loop, which skipped the nested input-object
-  binding step entirely, so every mutation and delete failed to resolve its
-  path identifier. Caller-supplied JSON parse failures were reported as
+  **Three defects found and fixed.** `RequestBuilder` used `continue` inside a
+  `switch` in a `for` loop, which skipped the nested input-object binding step
+  entirely, so every mutation and delete failed to resolve its path identifier.
+  Caller-supplied JSON parse failures were reported as
   `UPSTREAM_RESPONSE_INVALID` (exit 4) instead of `VALIDATION_ERROR` (exit 2).
+  Diff self-review found a third: argument coercion ran inside
+  `CapabilityPlanner.plan`, which the executor called only after awaiting the
+  credential provider, so an invalid argument on a machine with no credential
+  reported `AUTHENTICATION_FAILED` (exit 3) instead of `VALIDATION_ERROR`
+  (exit 2), contradicting `command.md#validation`. The scope check is now a
+  separate step: the executor plans locally, resolves the credential, then
+  validates scopes, all still before transport.
+
+  **Final verification totals.** 188 tests in 30 suites; `swiftlint` reports 0
+  violations in 85 files; the reader binary returns `VALIDATION_ERROR` with
+  exit code 2 for an over-length identifier with no credentials configured.
 
   **Capability status changes.** `implemented`: the 28 reader, 27 writer, and 9
   admin capability ids listed in
