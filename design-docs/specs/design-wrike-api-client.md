@@ -94,6 +94,19 @@ by a response sink rather than by a second decoding path:
 - A download never replaces an existing file. The local pre-check and the write
   itself both refuse, so a file that appears in the window between them is still
   not clobbered.
+- A body shorter or longer than the `Content-Length` the response declared is
+  refused as `TRANSPORT_FAILED` with exit `5`, and nothing is written, so a
+  truncated transfer cannot land as a complete file. The comparison is made only
+  where it is meaningful: an absent, unparsable, or negative length, and any
+  content-encoded body, leave the check off, because the declared length then
+  either does not exist or counts encoded bytes while the delivered file holds
+  decoded ones.
+- Both routes are documented to answer with binary content, so a body-less
+  success is a contract violation rather than an empty attachment. A `204` or
+  `205` with a file sink writes no file and reports `UPSTREAM_RESPONSE_INVALID`
+  with exit `4`, instead of a zero-byte file a caller would read as a completed
+  transfer. The rule is limited to the statuses that define an absent body: an
+  attachment whose stored content is genuinely empty still arrives as a `200`.
 - The written file is created with `0600` permissions.
 - The success body is never held in a `WrikeResponse`, an error description, a
   log line, or a snapshot. The response carries the path, the byte count, and
@@ -130,7 +143,9 @@ The client must not:
 | HTTP 429 | `RATE_LIMITED` | honor `Retry-After`; bounded GET retry only |
 | HTTP 5xx | `UPSTREAM_UNAVAILABLE` | bounded GET retry with jitter |
 | transport timeout/connectivity | `TRANSPORT_FAILED` | bounded GET retry with jitter |
+| download shorter or longer than its declared length | `TRANSPORT_FAILED` | do not retry automatically; nothing was written |
 | incompatible success payload | `UPSTREAM_RESPONSE_INVALID` | do not retry automatically |
+| body-less success on a binary route | `UPSTREAM_RESPONSE_INVALID` | do not retry automatically; nothing was written |
 
 `TRANSPORT_FAILED` remains distinct in the public GraphQL error contract so a
 caller can distinguish a local connectivity failure from an HTTP response from
@@ -141,6 +156,14 @@ Public errors contain a stable code, safe message, request id, HTTP status when
 available, and non-secret recovery guidance. Raw bodies are available only to
 redacted debug instrumentation and never when they might contain credentials
 or user content.
+
+A capability may declare its own guidance for `VALIDATION_ERROR` and `NOT_FOUND`,
+for the case where Wrike's refusal is structural rather than a caller mistake and
+the stable code alone names the wrong cause. `attachments.preview` uses it: a type
+that has no preview is refused exactly as a missing attachment is, so the guidance
+names that second cause and points at `attachmentDownload`. Declared guidance never
+replaces guidance a mapped error already carries, and it never changes the code,
+the HTTP status, or the exit code.
 
 ## Retry and Rate-Limit Policy
 

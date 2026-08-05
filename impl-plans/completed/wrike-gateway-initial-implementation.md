@@ -1110,7 +1110,7 @@ condition.
   `<dir>`; the first round-trip run therefore left the operator's kinko
   pointing at a deleted temporary directory, and `kinko status`,
   `kinko config show`, and `kinko config set` all failed until the file was
-  restored to `kinko_dir="/Users/taco/.local/kinko"` by hand. The suite now
+  restored to `kinko_dir="$HOME/.local/kinko"` by hand. The suite now
   passes `--config <temporary file>` on every command and asserts the
   operator's bootstrap config is byte-identical after the run; re-verified by
   diff. Second, an unlock session is not isolated by `--kinko-dir` or `--path`:
@@ -1400,3 +1400,8 @@ error upstream would not be caught here. The gateway does not itself compare a
 download's `Content-Length` against the bytes written; it relies on the
 transport to surface a truncated response as a transport failure, which was not
 exercised because the loopback server always sends the length it declares.
+
+- 2026-08-05: The residual risks recorded above were triaged by a later
+  review-and-improve pass. Its findings, dispositions, and verification are in
+  `impl-plans/completed/wrike-gateway-review-and-improve.md`. The entries above
+  are left as written: they record what was true when this plan closed.

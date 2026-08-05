@@ -73,6 +73,14 @@ or a log line. `attachmentPreview` takes the same arguments plus an optional
 `attachmentDownloadUrl` remains available when a time-limited URL is wanted
 instead of a transfer.
 
+A transfer is either complete or absent. A body that disagrees with the
+`Content-Length` the response declared is refused as `TRANSPORT_FAILED`, and a
+body-less success on either route is refused as `UPSTREAM_RESPONSE_INVALID`
+rather than written as a zero-byte file; neither leaves a partial file behind.
+Not every attachment type has a preview, and Wrike refuses a preview-less type
+the same way it refuses a missing attachment, so `attachmentPreview` names that
+cause in the error's `recovery` guidance.
+
 ## Credentials
 
 Exactly four environment variables are read:
