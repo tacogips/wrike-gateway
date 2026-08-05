@@ -39,5 +39,32 @@ public enum ContactCapabilities {
     summary: "Returns one contact by its opaque identifier."
   )
 
-  public static let all: [CapabilityDefinition] = [list, get]
+  /// Bill and cost rate history for one or more contacts.
+  ///
+  /// Route and filters follow the official reference for
+  /// `GET /contacts/{contactIds}/contacts_history`, which accepts an
+  /// `updatedDate` instant range and a `fields` selection of `billRate` and
+  /// `costRate`. Several contacts are addressed through one comma-separated
+  /// path segment, so `ids` is a list bound to `{contactIds}`.
+  public static let historyFields = ["billRate", "costRate"]
+
+  public static let history = CapabilityDefinition(
+    id: CapabilityID("contacts.history"),
+    field: "contactsHistory",
+    tier: .reader,
+    operationClass: .read,
+    method: .get,
+    pathTemplate: "/contacts/{contactIds}/contacts_history",
+    arguments: [
+      HistoryModels.identifierArgument(placeholder: "contactIds")
+    ] + HistoryModels.filterArguments(
+      fieldEnum: "ContactHistoryField",
+      values: historyFields
+    ),
+    result: .list(ContactModels.changeHistory),
+    scopes: .workspaceRead,
+    summary: "Returns bill and cost rate history for the given contacts."
+  )
+
+  public static let all: [CapabilityDefinition] = [list, get, history]
 }

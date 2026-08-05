@@ -2,10 +2,12 @@ import WrikeGatewayCore
 
 /// Reader capabilities for attachments.
 ///
-/// Only metadata and the time-limited download URL are exposed. Attachment
-/// bytes never enter the JSON envelope, a stable model, an error message, or a
-/// test snapshot; binary retrieval is a separate reviewed capability that the
-/// initial contract does not register.
+/// Metadata, the time-limited download URL, and binary retrieval are all
+/// exposed, but they stay separate contracts. Attachment bytes never enter the
+/// JSON envelope, a stable model, an error message, or a test snapshot: the two
+/// binary capabilities carry a `.fileOutput` result, so their success body is
+/// streamed straight to the caller's destination path and the response value
+/// describes only the file that was written.
 public enum AttachmentCapabilities {
   public static let attachment = ModelShape(
     typeName: "Attachment",
@@ -94,5 +96,62 @@ public enum AttachmentCapabilities {
     summary: "Returns a time-limited download URL for one attachment. No bytes are transferred."
   )
 
-  public static let all: [CapabilityDefinition] = [list, get, url]
+  /// Sizes accepted by `GET /attachments/{attachmentId}/preview`, curated from
+  /// the official reference. An unlisted size fails locally by name instead of
+  /// reaching Wrike as a rejected request.
+  public static let previewSizes = ["w44", "w100", "w200", "w300", "w400", "h400"]
+
+  /// The attachment's content, written to a local file.
+  ///
+  /// Route confirmed against the official reference for
+  /// `GET /attachments/{attachmentId}/download`, which answers with an
+  /// `application/octet-stream` body. The body is never buffered into the
+  /// response envelope: `destination` selects the transport's file sink, and
+  /// the result describes the written file only.
+  public static let download = CapabilityDefinition(
+    id: CapabilityID("attachments.download"),
+    field: "attachmentDownload",
+    tier: .reader,
+    operationClass: .read,
+    method: .get,
+    pathTemplate: "/attachments/{attachmentId}/download",
+    arguments: [
+      ArgumentDefinition("id", .identifier, .path("attachmentId"), required: true),
+      ArgumentDefinition("destination", .string, .destinationPath, required: true)
+    ],
+    result: .fileOutput(FileOutputShape.shape),
+    scopes: .workspaceRead,
+    summary: "Downloads one attachment's content to destination. "
+      + "The path must not already exist; an existing file is never replaced."
+  )
+
+  /// A rendered preview of the attachment, written to a local file.
+  ///
+  /// Route and `size` values confirmed against the official reference for
+  /// `GET /attachments/{attachmentId}/preview`. Not every attachment type has a
+  /// preview; when Wrike has none it answers with a mapped upstream error and
+  /// nothing is written.
+  public static let preview = CapabilityDefinition(
+    id: CapabilityID("attachments.preview"),
+    field: "attachmentPreview",
+    tier: .reader,
+    operationClass: .read,
+    method: .get,
+    pathTemplate: "/attachments/{attachmentId}/preview",
+    arguments: [
+      ArgumentDefinition("id", .identifier, .path("attachmentId"), required: true),
+      ArgumentDefinition("destination", .string, .destinationPath, required: true),
+      ArgumentDefinition(
+        "size",
+        .enumeration("AttachmentPreviewSize", previewSizes),
+        .query("size")
+      )
+    ],
+    result: .fileOutput(FileOutputShape.shape),
+    scopes: .workspaceRead,
+    summary: "Downloads one attachment's preview to destination. "
+      + "The path must not already exist; an existing file is never replaced."
+  )
+
+  public static let all: [CapabilityDefinition] = [list, get, url, download, preview]
 }

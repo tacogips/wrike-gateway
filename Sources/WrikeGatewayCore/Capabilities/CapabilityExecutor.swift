@@ -62,7 +62,7 @@ public struct CapabilityExecutor: Sendable {
     let requestID = requestIDFactory()
     let response = try await send(plan: plan, credential: resolved, requestID: requestID)
     do {
-      return try ResponseProjection.result(for: plan.definition, body: response.body)
+      return try ResponseProjection.result(for: plan.definition, response: response)
     } catch let error as GatewayError {
       throw error.withContext(requestID: requestID, capabilityID: plan.capabilityID)
     }
@@ -195,7 +195,8 @@ public struct CapabilityExecutor: Sendable {
       body: request.body,
       timeout: request.timeout,
       capabilityID: request.capabilityID,
-      requestID: requestID
+      requestID: requestID,
+      responseSink: request.responseSink
     )
   }
 }

@@ -18,6 +18,9 @@ public actor RecordingTransport: WrikeTransport {
     public let hasAuthorization: Bool
     public let capabilityID: CapabilityID
     public let bodyDescription: String
+    /// Recorded so a test can prove a capability asked for a file sink, and
+    /// that no other capability ever does.
+    public let responseSink: WrikeResponseSink
 
     public var query: [String: String] {
       queryItems.reduce(into: [:]) { $0[$1.name] = $1.value }
@@ -72,7 +75,8 @@ public actor RecordingTransport: WrikeTransport {
         headerNames: request.headers.keys.sorted(),
         hasAuthorization: request.hasAuthorization,
         capabilityID: request.capabilityID,
-        bodyDescription: Self.describe(request.body)
+        bodyDescription: Self.describe(request.body),
+        responseSink: request.responseSink
       )
     )
 
@@ -87,7 +91,16 @@ public actor RecordingTransport: WrikeTransport {
 
     switch outcome {
     case .response(let response):
-      return response
+      // Canned responses are queued as in-memory bodies, so the sink is applied
+      // here through the same core delivery the live transport uses. A test
+      // therefore observes the production write rule, including the refusal to
+      // overwrite and the refusal to write an error body.
+      return try ResponseSinkDelivery.deliver(
+        sink: request.responseSink,
+        statusCode: response.statusCode,
+        headers: response.headers,
+        body: response.body
+      )
     case .failure(let failure):
       throw failure
     }

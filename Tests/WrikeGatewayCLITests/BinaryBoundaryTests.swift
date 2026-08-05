@@ -169,6 +169,63 @@ struct ExecutableLinkBoundaryTests {
   }
 }
 
+/// A minimal reader over a printed SDL document, used to prove the schema is
+/// self-contained. It only needs to find type names, so it works line by line
+/// rather than parsing GraphQL.
+enum SchemaDocument {
+  /// Names introduced by a `type X`, `input X`, or `enum X` block header.
+  static func definedTypeNames(in document: String) -> [String] {
+    document.components(separatedBy: "\n").compactMap { line in
+      let parts = line.split(separator: " ")
+      guard parts.count >= 2, ["type", "input", "enum"].contains(String(parts[0])) else {
+        return nil
+      }
+      return String(parts[1].prefix { $0 != "{" })
+    }
+  }
+
+  /// Names used in a field's type position or an argument's type position.
+  /// Documentation lines are skipped so prose cannot be mistaken for a type.
+  static func referencedTypeNames(in document: String) -> [String] {
+    var names: [String] = []
+    for line in document.components(separatedBy: "\n") {
+      let trimmed = line.trimmingCharacters(in: .whitespaces)
+      guard !trimmed.hasPrefix("#"), !trimmed.hasPrefix("\"\"\""),
+            let colon = trimmed.firstIndex(of: ":")
+      else {
+        continue
+      }
+      // Everything after the first colon is type syntax: names, brackets,
+      // exclamation marks, commas, and argument names before their own colons.
+      let tail = trimmed[trimmed.index(after: colon)...]
+      names.append(contentsOf: typeNames(in: String(tail)))
+    }
+    return names
+  }
+
+  private static func typeNames(in text: String) -> [String] {
+    var names: [String] = []
+    var current = ""
+    var isArgumentName = false
+    for character in text {
+      if character.isLetter || character.isNumber || character == "_" {
+        current.append(character)
+        continue
+      }
+      // A `name:` inside an argument list is an argument, not a type.
+      isArgumentName = character == ":"
+      if !current.isEmpty, !isArgumentName, current.first?.isUppercase == true {
+        names.append(current)
+      }
+      current = ""
+    }
+    if !current.isEmpty, current.first?.isUppercase == true {
+      names.append(current)
+    }
+    return names
+  }
+}
+
 @Suite("Cross-tier schema and help")
 struct CrossTierSchemaTests {
   @Test("Each binary prints only its linked tier's schema")
@@ -229,6 +286,22 @@ struct CrossTierSchemaTests {
       for definition in registry.definitions {
         #expect(printed.contains("Capability: \(definition.id.rawValue)"), "\(name) \(definition.id)")
       }
+    }
+  }
+
+  /// A printed schema that names a type it never defines is not a usable
+  /// document, and matching the printer against itself cannot detect that: both
+  /// sides would be equally wrong. This walks every type reference instead.
+  @Test("Every type named in a printed schema is defined in the same document")
+  func schemaDefinesEveryTypeItNames() throws {
+    let builtInScalars: Set<String> = ["ID", "String", "Int", "Float", "Boolean"]
+    for name in BuiltProducts.all {
+      let printed = try BuiltProducts.run(name, ["graphql", "schema"]).standardOutput
+      let defined = Set(SchemaDocument.definedTypeNames(in: printed))
+      let referenced = Set(SchemaDocument.referencedTypeNames(in: printed))
+      let undefined = referenced.subtracting(defined).subtracting(builtInScalars)
+      #expect(undefined.isEmpty, "\(name) names undefined types: \(undefined.sorted())")
+      #expect(defined.contains("Query"), "\(name)")
     }
   }
 

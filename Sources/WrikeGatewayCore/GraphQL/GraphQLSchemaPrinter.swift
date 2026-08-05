@@ -105,7 +105,7 @@ public struct GraphQLSchemaPrinter: Sendable {
     enumerations: inout [String: [String]]
   ) {
     switch argument.type {
-    case .enumeration(let name, let cases):
+    case .enumeration(let name, let cases), .enumerationList(let name, let cases):
       enumerations[name] = cases
     case .inputObject(let shape):
       guard rendered[shape.typeName] == nil else { return }

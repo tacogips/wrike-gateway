@@ -139,22 +139,24 @@ enum RequestBuilder {
     var jsonBody: [String: WrikeValue] = [:]
     var formBody: [WrikeQueryItem] = []
     var upload: FileUploadBody?
+    var responseSink: WrikeResponseSink = .memory
 
     for parameter in definition.arguments {
       guard let value = arguments[parameter.name] else { continue }
       switch parameter.binding {
       case .path(let placeholder):
-        guard case .identifier(let identifier) = value else {
-          throw GatewayError.internalFailure("Path argument \(parameter.name) is not an identifier.")
-        }
         path = path.replacingOccurrences(
           of: "{\(placeholder)}",
-          with: escapePathSegment(identifier.rawValue)
+          with: try pathSegment(for: value, argument: parameter.name)
         )
       case .query(let name):
         queryItems.append(contentsOf: encodeQuery(named: name, value: value, joined: false))
       case .queryList(let name):
         queryItems.append(contentsOf: encodeQuery(named: name, value: value, joined: true))
+      case .queryJSON(let name):
+        queryItems.append(
+          contentsOf: encodeQueryJSON(named: name, type: parameter.type, value: value)
+        )
       case .bodyJSON(let name):
         jsonBody[name] = jsonValue(value)
       case .bodyForm(let name):
@@ -170,13 +172,22 @@ enum RequestBuilder {
       case .filePath:
         guard case .filePath(let file) = value else { break }
         upload = makeUpload(path: file)
+      case .destinationPath:
+        // The destination never reaches Wrike; it only tells the transport
+        // where the success body must land.
+        guard case .destinationPath(let file) = value else { break }
+        responseSink = .file(path: file)
       case .scope, .container:
         // These carry no binding of their own; `break` leaves the switch so the
         // nested input-object bindings below still run.
         break
       }
 
-      if case .object(let fields) = value,
+      // Only a container delegates its bindings to its fields. An input object
+      // bound directly, as `.queryJSON` binds an instant range, is encoded by
+      // its own binding above and must not be expanded a second time here.
+      if parameter.binding == .container,
+         case .object(let fields) = value,
          case .inputObject(let shape) = parameter.type {
         try applyInputObject(
           shape: shape,
@@ -212,7 +223,8 @@ enum RequestBuilder {
       method: definition.method,
       path: path,
       queryItems: queryItems.sorted { $0.name < $1.name },
-      body: body
+      body: body,
+      responseSink: responseSink
     )
   }
 
@@ -231,17 +243,18 @@ enum RequestBuilder {
       guard let value = fields[field.name] else { continue }
       switch field.binding {
       case .path(let placeholder):
-        guard case .identifier(let identifier) = value else {
-          throw GatewayError.internalFailure("Input field \(field.name) is not an identifier.")
-        }
         path = path.replacingOccurrences(
           of: "{\(placeholder)}",
-          with: escapePathSegment(identifier.rawValue)
+          with: try pathSegment(for: value, argument: field.name)
         )
       case .query(let name):
         queryItems.append(contentsOf: encodeQuery(named: name, value: value, joined: false))
       case .queryList(let name):
         queryItems.append(contentsOf: encodeQuery(named: name, value: value, joined: true))
+      case .queryJSON(let name):
+        queryItems.append(
+          contentsOf: encodeQueryJSON(named: name, type: field.type, value: value)
+        )
       case .bodyJSON(let name):
         jsonBody[name] = jsonValue(value)
       case .bodyForm(let name):
@@ -249,6 +262,13 @@ enum RequestBuilder {
       case .filePath:
         guard case .filePath(let file) = value else { break }
         upload = makeUpload(path: file)
+      case .destinationPath:
+        // Only mutations use an input container, and a mutation may not write a
+        // local file. Failing loudly keeps a nested destination from silently
+        // doing nothing if that rule is ever weakened.
+        throw GatewayError.internalFailure(
+          "Input field \(field.name) declares a destination path inside an input object."
+        )
       case .page, .scope, .container:
         continue
       }
@@ -276,6 +296,31 @@ enum RequestBuilder {
       "Field \(definition.field) does not support scoping by \(scope.relation.rawValue).",
       recovery: supported.isEmpty ? nil : "Supported scopes: \(supported)."
     )
+  }
+
+  /// Renders one path segment for a `.path` binding.
+  ///
+  /// Wrike's multi-entity routes, such as `/tasks/{taskIds}/tasks_history`,
+  /// address several entities through one comma-separated segment. Each
+  /// identifier is escaped before joining, so a separator can only come from
+  /// this function and never from a caller-supplied value.
+  private static func pathSegment(
+    for value: ValidatedArgument,
+    argument: String
+  ) throws -> String {
+    switch value {
+    case .identifier(let identifier):
+      return escapePathSegment(identifier.rawValue)
+    case .identifierList(let identifiers):
+      guard !identifiers.isEmpty else {
+        throw GatewayError.validation(
+          "Argument \(argument) must contain at least one identifier."
+        )
+      }
+      return identifiers.map { escapePathSegment($0.rawValue) }.joined(separator: ",")
+    default:
+      throw GatewayError.internalFailure("Path argument \(argument) is not an identifier.")
+    }
   }
 
   private static func makeUpload(path: String) -> FileUploadBody {
@@ -308,9 +353,41 @@ enum RequestBuilder {
       return joined
         ? [WrikeQueryItem(name: name, value: encodeJSONList(items))]
         : items.map { WrikeQueryItem(name: name, value: $0) }
-    case .scope, .page, .filePath, .object:
+    case .scope, .page, .filePath, .destinationPath, .object:
       return []
     }
+  }
+
+  /// Wrike encodes object-valued query filters, such as an instant range, as a
+  /// JSON document in a single query item. An object whose optional fields were
+  /// all omitted carries no filter, so it is dropped rather than sent as `{}`.
+  ///
+  /// Nested field names come from each field's `.bodyJSON` binding when it
+  /// declares one, so the upstream JSON key stays an adapter detail exactly as
+  /// it is for a request body, and the public argument name can differ.
+  private static func encodeQueryJSON(
+    named name: String,
+    type: ArgumentValueType,
+    value: ValidatedArgument
+  ) -> [WrikeQueryItem] {
+    let json: WrikeValue
+    if case .inputObject(let shape) = type, case .object(let fields) = value {
+      var object: [String: WrikeValue] = [:]
+      for field in shape.fields {
+        guard let fieldValue = fields[field.name] else { continue }
+        if case .bodyJSON(let upstream) = field.binding {
+          object[upstream] = jsonValue(fieldValue)
+        } else {
+          object[field.name] = jsonValue(fieldValue)
+        }
+      }
+      json = .object(object)
+    } else {
+      json = jsonValue(value)
+    }
+    if json.isNull { return [] }
+    if case .object(let fields) = json, fields.isEmpty { return [] }
+    return [WrikeQueryItem(name: name, value: json.encodedJSON(pretty: false))]
   }
 
   private static func formItems(named name: String, value: ValidatedArgument) -> [WrikeQueryItem] {
@@ -340,7 +417,7 @@ enum RequestBuilder {
     case .integer(let number): return .int(number)
     case .number(let number): return .double(number)
     case .boolean(let flag): return .bool(flag)
-    case .filePath: return .null
+    case .filePath, .destinationPath: return .null
     case .scope(let scope): return .string(scope.identifier.rawValue)
     case .page: return .null
     case .object(let fields):

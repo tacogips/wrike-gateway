@@ -43,6 +43,14 @@ public struct WrikeReadClient: Sendable {
     try await execute(ContactCapabilities.get, ["id": .string(id)])
   }
 
+  public func contactsHistory(
+    ids: [String],
+    updatedDate: WrikeInstantRange? = nil,
+    fields: [String]? = nil
+  ) async throws -> WrikeValue {
+    try await execute(ContactCapabilities.history, Self.historyArguments(ids, updatedDate, fields))
+  }
+
   public func user(id: String) async throws -> WrikeValue {
     try await execute(UserCapabilities.get, ["id": .string(id)])
   }
@@ -97,6 +105,14 @@ public struct WrikeReadClient: Sendable {
     try await execute(ProjectCapabilities.get, ["id": .string(id)])
   }
 
+  public func foldersHistory(
+    ids: [String],
+    updatedDate: WrikeInstantRange? = nil,
+    fields: [String]? = nil
+  ) async throws -> WrikeValue {
+    try await execute(FolderCapabilities.history, Self.historyArguments(ids, updatedDate, fields))
+  }
+
   public func tasks(
     scope: WrikeScope? = nil,
     page: PageInput? = nil,
@@ -111,6 +127,14 @@ public struct WrikeReadClient: Sendable {
 
   public func task(id: String) async throws -> WrikeValue {
     try await execute(TaskCapabilities.get, ["id": .string(id)])
+  }
+
+  public func tasksHistory(
+    ids: [String],
+    updatedDate: WrikeInstantRange? = nil,
+    fields: [String]? = nil
+  ) async throws -> WrikeValue {
+    try await execute(TaskCapabilities.history, Self.historyArguments(ids, updatedDate, fields))
   }
 
   // MARK: - Collaboration and administration views
@@ -193,6 +217,43 @@ public struct WrikeReadClient: Sendable {
     )
   }
 
+  /// Writes one attachment's content to `destination`, which must not already
+  /// exist. The bytes go from the transport to the file; no SDK value holds
+  /// them.
+  public func attachmentDownload(id: String, destination: String) async throws -> WrikeValue {
+    try await execute(
+      AttachmentCapabilities.download,
+      ["id": .string(id), "destination": .string(destination)]
+    )
+  }
+
+  /// Writes one attachment's rendered preview to `destination`, which must not
+  /// already exist.
+  public func attachmentPreview(
+    id: String,
+    destination: String,
+    size: String? = nil
+  ) async throws -> WrikeValue {
+    try await execute(
+      AttachmentCapabilities.preview,
+      ["id": .string(id), "destination": .string(destination), "size": size.map(WrikeValue.string)]
+    )
+  }
+
+  /// The three field-history capabilities take the same argument triple, so the
+  /// SDK builds it once rather than three times.
+  static func historyArguments(
+    _ ids: [String],
+    _ updatedDate: WrikeInstantRange?,
+    _ fields: [String]?
+  ) -> [String: WrikeValue?] {
+    [
+      "ids": .array(ids.map(WrikeValue.string)),
+      "updatedDate": updatedDate?.value,
+      "fields": fields.map { .array($0.map(WrikeValue.string)) }
+    ]
+  }
+
   static func pageValue(_ page: PageInput) -> WrikeValue {
     var fields: [String: WrikeValue] = [:]
     if let size = page.pageSize { fields["pageSize"] = .int(size) }
@@ -221,5 +282,27 @@ public struct WrikeScope: Sendable, Equatable {
 
   public var value: WrikeValue {
     .object([relation.rawValue: .string(identifier)])
+  }
+}
+
+/// A typed instant range for the SDK, mirroring the GraphQL `InstantRangeInput`.
+///
+/// Both bounds are optional and each is passed through verbatim as the opaque
+/// timestamp string Wrike documents, so the gateway never reinterprets an
+/// operator's date format.
+public struct WrikeInstantRange: Sendable, Equatable {
+  public let start: String?
+  public let end: String?
+
+  public init(start: String? = nil, end: String? = nil) {
+    self.start = start
+    self.end = end
+  }
+
+  public var value: WrikeValue {
+    var fields: [String: WrikeValue] = [:]
+    if let start { fields["start"] = .string(start) }
+    if let end { fields["end"] = .string(end) }
+    return .object(fields)
   }
 }

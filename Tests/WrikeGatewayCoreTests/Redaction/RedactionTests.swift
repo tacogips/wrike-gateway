@@ -12,6 +12,9 @@ private enum FakeSecrets {
   static let authorizationCode = "FAKE-AUTH-CODE-do-not-log-0d31"
   static let oauthState = "FAKE-OAUTH-STATE-do-not-log-77aa"
   static let webhookSecret = "FAKE-WEBHOOK-SECRET-do-not-log-52cc"
+  /// Stands in for downloaded user content, which is not a credential but is
+  /// held to the same rule: it may reach the caller's file and nothing else.
+  static let attachmentContent = "FAKE-ATTACHMENT-CONTENT-do-not-log-6b19"
 
   static let all = [
     clientSecret, accessToken, refreshToken, authorizationCode, oauthState, webhookSecret
@@ -148,6 +151,54 @@ struct StructuralRedactionTests {
     let rendered = projected.encodedJSON(pretty: false)
     #expect(!rendered.contains(FakeSecrets.webhookSecret))
     #expect(!rendered.contains("secret"))
+  }
+
+  /// A file-output capability is the only one whose upstream body is content
+  /// rather than metadata. Pinning its result shape in core, rather than
+  /// letting each resource declare one, is what stops a future capability from
+  /// adding a field that could carry a downloaded byte into the envelope.
+  @Test("The shared file-output shape describes a file and can hold no content")
+  func fileOutputShapeCarriesNoContent() {
+    let names = FileOutputShape.shape.fields.map(\.name)
+    #expect(names == ["path", "byteCount", "contentType"])
+    for field in FileOutputShape.shape.fields {
+      // A scalar field cannot nest, so no sub-object can smuggle a body in.
+      #expect(!field.type.isComposite, "\(field.name)")
+    }
+  }
+
+  @Test("A successful file-output response keeps its body out of memory")
+  func fileOutputResponseHoldsNoBody() throws {
+    let directory = try TemporaryDirectory()
+    let path = directory.path("attachment.bin")
+
+    let response = try ResponseSinkDelivery.deliver(
+      sink: .file(path: path),
+      statusCode: 200,
+      headers: ["Content-Type": "application/octet-stream"],
+      body: Data(FakeSecrets.attachmentContent.utf8)
+    )
+
+    #expect(response.body.isEmpty)
+    let definition = CapabilityDefinition(
+      id: CapabilityID("widgets.download"),
+      field: "downloadWidget",
+      tier: .reader,
+      operationClass: .read,
+      method: .get,
+      pathTemplate: "/widgets/{widgetId}/download",
+      arguments: [
+        ArgumentDefinition("id", .identifier, .path("widgetId"), required: true),
+        ArgumentDefinition("destination", .string, .destinationPath, required: true)
+      ],
+      result: .fileOutput(FileOutputShape.shape),
+      scopes: .workspaceRead,
+      summary: "Downloads a widget."
+    )
+    let projected = try ResponseProjection.result(for: definition, response: response)
+    let rendered = projected.encodedJSON(pretty: false)
+    #expect(!rendered.contains(FakeSecrets.attachmentContent))
+    #expect(rendered.contains("byteCount"))
   }
 
   @Test("An upload body describes only its file name, never its bytes")

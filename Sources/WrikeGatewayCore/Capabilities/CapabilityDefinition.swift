@@ -2,12 +2,17 @@ import Foundation
 
 /// How a validated argument value reaches the upstream request.
 public enum ArgumentBinding: Sendable, Equatable {
-  /// Substituted into a `{name}` placeholder in the path template.
+  /// Substituted into a `{name}` placeholder in the path template. An
+  /// identifier list renders as one comma-separated segment, which is how
+  /// Wrike's multi-entity routes address several entities at once.
   case path(String)
   /// Sent as a single query parameter with the given upstream name.
   case query(String)
   /// Sent as a comma-separated query parameter, matching Wrike's list encoding.
   case queryList(String)
+  /// Sent as a JSON document in a single query parameter. Wrike uses this
+  /// encoding for object-valued filters such as an instant range.
+  case queryJSON(String)
   /// Sent as a JSON body field.
   case bodyJSON(String)
   /// Sent as a form field.
@@ -18,6 +23,9 @@ public enum ArgumentBinding: Sendable, Equatable {
   case page
   /// A validated local file path used for a streamed upload.
   case filePath
+  /// A validated local destination path. It selects the request's file response
+  /// sink and contributes nothing to the upstream URL, query, or body.
+  case destinationPath
   /// Carries no binding of its own; only its nested input-object fields bind.
   /// Mutations use this for their single `input` argument.
   case container
@@ -34,6 +42,10 @@ public enum ArgumentValueType: Sendable, Equatable {
   case scope
   case page
   case enumeration(String, [String])
+  /// A list restricted to a curated set of values, such as the field selection
+  /// accepted by Wrike's field-history routes. Validating locally means an
+  /// unaccepted value is a named validation error rather than an upstream 400.
+  case enumerationList(String, [String])
   case inputObject(InputObjectShape)
 
   public var graphQLTypeName: String {
@@ -48,6 +60,7 @@ public enum ArgumentValueType: Sendable, Equatable {
     case .scope: return ScopeInput.typeName
     case .page: return "PageInput"
     case .enumeration(let name, _): return name
+    case .enumerationList(let name, _): return "[\(name)!]"
     case .inputObject(let shape): return shape.typeName
     }
   }
@@ -58,12 +71,23 @@ public struct ArgumentDefinition: Sendable, Equatable {
   public let type: ArgumentValueType
   public let binding: ArgumentBinding
   public let isRequired: Bool
+  /// Upstream limit on a list argument's length, when the reference documents
+  /// one. Enforcing it locally keeps an over-long request from being assembled
+  /// at all, rather than sending a URL Wrike will refuse.
+  public let maximumCount: Int?
 
-  public init(_ name: String, _ type: ArgumentValueType, _ binding: ArgumentBinding, required: Bool = false) {
+  public init(
+    _ name: String,
+    _ type: ArgumentValueType,
+    _ binding: ArgumentBinding,
+    required: Bool = false,
+    maximumCount: Int? = nil
+  ) {
     self.name = name
     self.type = type
     self.binding = binding
     self.isRequired = required
+    self.maximumCount = maximumCount
   }
 }
 
@@ -209,6 +233,7 @@ public struct CapabilityDefinition: Sendable, Equatable {
     if case .connection = result, maximumPageSize == nil {
       problems.append("\(id) returns a connection without a documented maximum page size.")
     }
+    problems.append(contentsOf: fileOutputProblems())
     if maximumPageSize != nil, !arguments.contains(where: { $0.binding == .page }) {
       problems.append("\(id) declares a maximum page size without a page argument.")
     }
@@ -218,6 +243,31 @@ public struct CapabilityDefinition: Sendable, Equatable {
     }
     if field.isEmpty || summary.isEmpty {
       problems.append("\(id) is missing a field name or summary.")
+    }
+    return problems
+  }
+
+  /// A destination path and a file result are two halves of the same contract.
+  /// Either alone would be a silent hazard: a sink with no file result would
+  /// write bytes the caller never asked to receive, and a file result with no
+  /// sink would leave the projection with nothing to describe. Only reads may
+  /// write a destination, so no mutation can be made to produce a local file as
+  /// a side effect.
+  private func fileOutputProblems() -> [String] {
+    var problems: [String] = []
+    let destinations = arguments.filter { $0.binding == .destinationPath }
+    if result.isFileOutput {
+      if destinations.count != 1 {
+        problems.append("\(id) returns a file output without exactly one destination argument.")
+      }
+      if !destinations.allSatisfy(\.isRequired) {
+        problems.append("\(id) has an optional destination argument for a file output.")
+      }
+      if operationClass != .read {
+        problems.append("\(id) writes a local file but is not a read operation.")
+      }
+    } else if !destinations.isEmpty {
+      problems.append("\(id) accepts a destination argument without returning a file output.")
     }
     return problems
   }

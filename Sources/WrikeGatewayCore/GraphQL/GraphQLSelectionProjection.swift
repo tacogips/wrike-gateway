@@ -13,7 +13,7 @@ public enum GraphQLSelectionProjection {
     fieldName: String
   ) throws {
     switch result {
-    case .single(let shape), .list(let shape):
+    case .single(let shape), .list(let shape), .fileOutput(let shape):
       try validate(selections: selections, shape: shape, path: fieldName)
     case .connection(let shape):
       try validateConnection(selections: selections, shape: shape, path: fieldName)

@@ -105,16 +105,26 @@ public enum ResultShape: Sendable, Equatable {
   case payload(field: String, ModelShape)
   /// A destructive result carrying only the confirmed deleted identifier.
   case deletion
+  /// A body written to the caller's destination path. The result describes the
+  /// written file; the bytes themselves never enter the response value.
+  case fileOutput(ModelShape)
 
   public var elementShape: ModelShape? {
     switch self {
-    case .single(let shape), .connection(let shape), .list(let shape):
+    case .single(let shape), .connection(let shape), .list(let shape), .fileOutput(let shape):
       return shape
     case .payload(_, let shape):
       return shape
     case .deletion:
       return nil
     }
+  }
+
+  /// True when the capability answers with a body written to disk rather than
+  /// with the documented JSON envelope.
+  public var isFileOutput: Bool {
+    if case .fileOutput = self { return true }
+    return false
   }
 
   /// The GraphQL type name printed for the capability's field.
@@ -125,6 +135,23 @@ public enum ResultShape: Sendable, Equatable {
     case .list(let shape): return "[\(shape.typeName)!]!"
     case .payload(_, let shape): return "\(shape.typeName)Payload"
     case .deletion: return "DeletionPayload"
+    case .fileOutput(let shape): return "\(shape.typeName)!"
     }
   }
+}
+
+/// The stable result of a capability that writes its body to a local file.
+///
+/// Declared in core rather than per resource so every file-output capability
+/// answers with the same three facts and none can add a field that could hold
+/// content.
+public enum FileOutputShape {
+  public static let shape = ModelShape(
+    typeName: "DownloadedFile",
+    fields: [
+      ModelField("path", .string, required: true),
+      ModelField("byteCount", .integer, required: true),
+      ModelField("contentType", .string)
+    ]
+  )
 }

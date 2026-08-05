@@ -105,5 +105,44 @@ public enum TaskCapabilities {
     summary: "Returns one task by its opaque identifier."
   )
 
-  public static let all: [CapabilityDefinition] = [list, get]
+  public static let changeHistory = ModelShape(
+    typeName: "TaskChangeHistory",
+    fields: [
+      ModelField("id", .identifier, required: true),
+      ModelField("plannedCost", .objectList(HistoryModels.budgetMetricItem)),
+      ModelField("plannedFees", .objectList(HistoryModels.budgetMetricItem)),
+      ModelField("actualCost", .objectList(HistoryModels.budgetMetricItem)),
+      ModelField("actualFees", .objectList(HistoryModels.budgetMetricItem))
+    ]
+  )
+
+  /// Budget-metric history for one or more tasks.
+  ///
+  /// Route and filters follow the official reference for
+  /// `GET /tasks/{taskIds}/tasks_history`, which accepts an `updatedDate`
+  /// instant range and a `fields` selection of `plannedCost`, `plannedFees`,
+  /// `actualCost`, and `actualFees`. Unlike folders, tasks carry the metrics at
+  /// the top level rather than under a project object.
+  /// Tasks carry no `budget` metric; only folders and projects do.
+  public static let historyFields = ["plannedCost", "plannedFees", "actualCost", "actualFees"]
+
+  public static let history = CapabilityDefinition(
+    id: CapabilityID("tasks.history"),
+    field: "tasksHistory",
+    tier: .reader,
+    operationClass: .read,
+    method: .get,
+    pathTemplate: "/tasks/{taskIds}/tasks_history",
+    arguments: [
+      HistoryModels.identifierArgument(placeholder: "taskIds")
+    ] + HistoryModels.filterArguments(
+      fieldEnum: "TaskHistoryField",
+      values: historyFields
+    ),
+    result: .list(changeHistory),
+    scopes: .workspaceRead,
+    summary: "Returns budget-metric history for the given tasks."
+  )
+
+  public static let all: [CapabilityDefinition] = [list, get, history]
 }

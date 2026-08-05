@@ -64,6 +64,28 @@ enum ReaderCases {
       responseData: contact
     ),
     ReaderCase(
+      ContactCapabilities.history,
+      arguments: [
+        "ids": .array([.string("KUAAAAAA"), .string("KUAAAAAB")]),
+        "updatedDate": .object(["start": .string("2026-01-01T00:00:00Z")]),
+        "fields": .array([.string("billRate")])
+      ],
+      document: """
+        { contactsHistory(ids: ["KUAAAAAA", "KUAAAAAB"], \
+        updatedDate: {start: "2026-01-01T00:00:00Z"}, fields: ["billRate"]) \
+        { id billRateHistory { rateValue startDate } } }
+        """,
+      // Several contacts share one comma-separated path segment upstream.
+      expectedPath: "/api/v4/contacts/KUAAAAAA,KUAAAAAB/contacts_history",
+      expectedQuery: [
+        "updatedDate": "{\"start\":\"2026-01-01T00:00:00Z\"}",
+        // Wrike takes list query parameters as JSON arrays, not comma lists.
+        "fields": "[\"billRate\"]"
+      ],
+      responseKind: "contactsHistory",
+      responseData: WrikeFixtures.contactsHistory
+    ),
+    ReaderCase(
       UserCapabilities.get,
       arguments: ["id": .string("KUAAAAAA")],
       document: "{ user(id: \"KUAAAAAA\") { id firstName } }",
@@ -158,6 +180,21 @@ enum ReaderCases {
       responseData: folder
     ),
     ReaderCase(
+      FolderCapabilities.history,
+      arguments: [
+        "ids": .array([.string("IEAAAAAAI4AB5FNY")]),
+        "fields": .array([.string("budget"), .string("plannedCost")])
+      ],
+      document: """
+        { foldersHistory(ids: ["IEAAAAAAI4AB5FNY"], fields: ["budget", "plannedCost"]) \
+        { id project { budget { value startDate endDate } } } }
+        """,
+      expectedPath: "/api/v4/folders/IEAAAAAAI4AB5FNY/folders_history",
+      expectedQuery: ["fields": "[\"budget\",\"plannedCost\"]"],
+      responseKind: "foldersHistory",
+      responseData: WrikeFixtures.foldersHistory
+    ),
+    ReaderCase(
       TaskCapabilities.list,
       arguments: [
         "scope": .object(["folderId": .string("IEAAAAAAI4AB5FNY")]),
@@ -179,6 +216,17 @@ enum ReaderCases {
       expectedPath: "/api/v4/tasks/IEAAAAAAKQAB5FNY",
       responseKind: "tasks",
       responseData: task
+    ),
+    ReaderCase(
+      TaskCapabilities.history,
+      arguments: ["ids": .array([.string("IEAAAAAAKQAB5FNY")])],
+      document: """
+        { tasksHistory(ids: ["IEAAAAAAKQAB5FNY"]) \
+        { id plannedCost { value startDate } actualCost { value } } }
+        """,
+      expectedPath: "/api/v4/tasks/IEAAAAAAKQAB5FNY/tasks_history",
+      responseKind: "tasksHistory",
+      responseData: WrikeFixtures.tasksHistory
     ),
     ReaderCase(
       CommentCapabilities.list,
@@ -448,7 +496,31 @@ struct ReaderRegistryCoherenceTests {
   func everyCapabilityHasACase() throws {
     let registered = Set(try ReadCapabilities.registry().definitions.map(\.id))
     let covered = Set(ReaderCases.all.map(\.definition.id))
+      .union(FileOutputCases.all.map(\.definition.id))
     #expect(registered == covered, "Uncovered: \(registered.subtracting(covered).map(\.rawValue))")
+  }
+
+  /// The envelope-backed harness asserts a JSON `kind`/`data` body, which a
+  /// file-output capability never returns. Keeping the two lists disjoint is
+  /// what stops a download from being "covered" by assertions that cannot
+  /// apply to it.
+  @Test("The envelope harness and the file-output harness cover disjoint capabilities")
+  func harnessesAreDisjoint() throws {
+    for testCase in ReaderCases.all {
+      #expect(!testCase.definition.result.isFileOutput, "\(testCase.name)")
+    }
+    for testCase in FileOutputCases.all {
+      #expect(testCase.definition.result.isFileOutput, "\(testCase.name)")
+    }
+  }
+
+  @Test("Only the two reviewed binary-transfer capabilities write a local file")
+  func fileOutputIsLimited() throws {
+    let writing = try ReadCapabilities.registry().definitions
+      .filter(\.result.isFileOutput)
+      .map(\.id.rawValue)
+      .sorted()
+    #expect(writing == ["attachments.download", "attachments.preview"])
   }
 }
 

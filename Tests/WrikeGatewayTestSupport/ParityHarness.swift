@@ -136,5 +136,46 @@ public enum WrikeFixtures {
     "hookUrl":"https://example.test/hook","status":"Active","recursive":true}
     """
 
+  public static let contactsHistory = """
+    {"id":"KUAAAAAA",\
+    "billRateHistory":[{"rateValue":120.0,"startDate":"2026-01-01T00:00:00Z",\
+    "endDate":"2026-06-30T00:00:00Z","rateSource":"JobRole"}],\
+    "costRateHistory":[{"rateValue":80.0,"startDate":"2026-01-01T00:00:00Z","rateSource":"User"}]}
+    """
+
+  public static let foldersHistory = """
+    {"id":"IEAAAAAAI4AB5FNY","project":{\
+    "plannedCost":[{"value":1000.0,"startDate":"2026-01-01T00:00:00Z"}],\
+    "budget":[{"value":5000.0,"startDate":"2026-01-01T00:00:00Z",\
+    "endDate":"2026-06-30T00:00:00Z"}]}}
+    """
+
+  public static let tasksHistory = """
+    {"id":"IEAAAAAAKQAB5FNY",\
+    "plannedCost":[{"value":250.0,"startDate":"2026-01-01T00:00:00Z"}],\
+    "actualCost":[{"value":300.0,"startDate":"2026-02-01T00:00:00Z"}]}
+    """
+
   public static let errorBody = "{\"error\":\"not_authorized\",\"errorDescription\":\"detail\"}"
+}
+
+/// A self-removing temporary directory for tests that must observe real file
+/// creation, permissions, and refusal to overwrite.
+public final class TemporaryDirectory: @unchecked Sendable {
+  public let url: URL
+
+  public init() throws {
+    url = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appendingPathComponent("wrike-gateway-tests-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+  }
+
+  /// A path inside the directory that does not exist yet.
+  public func path(_ name: String) -> String {
+    url.appendingPathComponent(name).path
+  }
+
+  deinit {
+    try? FileManager.default.removeItem(at: url)
+  }
 }

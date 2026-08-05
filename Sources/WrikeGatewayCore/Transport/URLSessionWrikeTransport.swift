@@ -39,7 +39,12 @@ public final class URLSessionWrikeTransport: NSObject, WrikeTransport, @unchecke
     for (name, value) in request.headers {
       urlRequest.setValue(value, forHTTPHeaderField: name)
     }
-    urlRequest.setValue("application/json", forHTTPHeaderField: "Accept")
+    // A download answers with `application/octet-stream`, so demanding JSON
+    // would reject the very body the capability asked for.
+    urlRequest.setValue(
+      request.responseSink.destinationPath == nil ? "application/json" : "*/*",
+      forHTTPHeaderField: "Accept"
+    )
     if let token = request.bearerToken {
       urlRequest.setValue("Bearer \(token.reveal())", forHTTPHeaderField: "Authorization")
     }
@@ -47,18 +52,18 @@ public final class URLSessionWrikeTransport: NSObject, WrikeTransport, @unchecke
     do {
       switch request.body {
       case .none:
-        return try await perform(urlRequest)
+        return try await perform(urlRequest, sink: request.responseSink)
       case .json(let value):
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         urlRequest.httpBody = Data(value.encodedJSON(pretty: false).utf8)
-        return try await perform(urlRequest)
+        return try await perform(urlRequest, sink: request.responseSink)
       case .form(let items):
         urlRequest.setValue(
           "application/x-www-form-urlencoded",
           forHTTPHeaderField: "Content-Type"
         )
         urlRequest.httpBody = Data(Self.formEncoded(items).utf8)
-        return try await perform(urlRequest)
+        return try await perform(urlRequest, sink: request.responseSink)
       case .file(let upload):
         return try await performUpload(urlRequest, upload: upload)
       }
@@ -69,8 +74,20 @@ public final class URLSessionWrikeTransport: NSObject, WrikeTransport, @unchecke
     }
   }
 
-  private func perform(_ request: URLRequest) async throws -> WrikeResponse {
+  private func perform(_ request: URLRequest, sink: WrikeResponseSink) async throws -> WrikeResponse {
     do {
+      if case .file(let path) = sink {
+        // `download` streams to a temporary file, so an attachment of any size
+        // never passes through this process's memory.
+        let (temporaryURL, response) = try await session.download(for: request)
+        let http = try Self.httpResponse(response)
+        return try ResponseSinkDelivery.deliver(
+          destinationPath: path,
+          statusCode: http.statusCode,
+          headers: Self.headers(of: http),
+          temporaryURL: temporaryURL
+        )
+      }
       let (data, response) = try await session.data(for: request)
       return try Self.makeResponse(data: data, response: response)
     } catch let failure as TransportFailure {
@@ -101,15 +118,24 @@ public final class URLSessionWrikeTransport: NSObject, WrikeTransport, @unchecke
   }
 
   private static func makeResponse(data: Data, response: URLResponse) throws -> WrikeResponse {
+    let http = try httpResponse(response)
+    return WrikeResponse(statusCode: http.statusCode, headers: headers(of: http), body: data)
+  }
+
+  private static func httpResponse(_ response: URLResponse) throws -> HTTPURLResponse {
     guard let http = response as? HTTPURLResponse else {
       throw TransportFailure.malformedResponse("response was not an HTTP response")
     }
+    return http
+  }
+
+  private static func headers(of response: HTTPURLResponse) -> [String: String] {
     var headers: [String: String] = [:]
-    for (key, value) in http.allHeaderFields {
+    for (key, value) in response.allHeaderFields {
       guard let name = key as? String, let text = value as? String else { continue }
       headers[name.lowercased()] = text
     }
-    return WrikeResponse(statusCode: http.statusCode, headers: headers, body: data)
+    return headers
   }
 
   static func formEncoded(_ items: [WrikeQueryItem]) -> String {

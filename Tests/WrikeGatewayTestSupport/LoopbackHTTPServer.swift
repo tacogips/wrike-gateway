@@ -167,7 +167,12 @@ public final class LoopbackHTTPServer: @unchecked Sendable {
     let bodyData = Data(response.body.utf8)
     var head = "HTTP/1.1 \(response.status) \(reason(for: response.status))\r\n"
     head += "Content-Length: \(bodyData.count)\r\n"
-    head += "Content-Type: application/json\r\n"
+    // A canned response may declare its own content type, as an attachment
+    // download does. Emitting the JSON default unconditionally would send two
+    // conflicting `Content-Type` headers.
+    if !response.headers.keys.contains(where: { $0.lowercased() == "content-type" }) {
+      head += "Content-Type: application/json\r\n"
+    }
     head += "Connection: close\r\n"
     for (name, value) in response.headers.sorted(by: { $0.key < $1.key }) {
       head += "\(name): \(value)\r\n"

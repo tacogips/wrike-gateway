@@ -14,13 +14,48 @@ public indirect enum ValidatedArgument: Sendable, Equatable {
   case scope(ScopeInput)
   case page(PageInput)
   case filePath(String)
+  case destinationPath(String)
   case object([String: ValidatedArgument])
 }
 
-/// Checks that a declared file path names a readable regular file.
+/// Why a declared destination path cannot receive a downloaded body.
+///
+/// Each case is a distinct operator mistake with a distinct remedy, so they are
+/// reported separately rather than collapsed into one "unusable path".
+public enum DestinationProblem: String, Sendable, Equatable, CaseIterable {
+  case alreadyExists
+  case isDirectory
+  case parentMissing
+  case parentNotWritable
+
+  public var summary: String {
+    switch self {
+    case .alreadyExists: return "already exists"
+    case .isDirectory: return "names a directory"
+    case .parentMissing: return "has no existing parent directory"
+    case .parentNotWritable: return "has a parent directory that is not writable"
+    }
+  }
+
+  public var recovery: String {
+    switch self {
+    case .alreadyExists:
+      return "Choose a path that does not exist yet; a download never replaces a local file."
+    case .isDirectory:
+      return "Provide the full path of the file to create, including its name."
+    case .parentMissing, .parentNotWritable:
+      return "Create a writable parent directory first, then retry."
+    }
+  }
+}
+
+/// Checks that a declared file path names a readable regular file, and that a
+/// declared destination path can be created.
 public protocol FileAccess: Sendable {
   func isReadableRegularFile(atPath path: String) -> Bool
   func fileSize(atPath path: String) -> Int?
+  /// `nil` when the path can be created as a new file.
+  func destinationProblem(atPath path: String) -> DestinationProblem?
 }
 
 public struct SystemFileAccess: FileAccess {
@@ -38,6 +73,26 @@ public struct SystemFileAccess: FileAccess {
   public func fileSize(atPath path: String) -> Int? {
     let attributes = try? FileManager.default.attributesOfItem(atPath: path)
     return (attributes?[.size] as? NSNumber)?.intValue
+  }
+
+  /// Checked before the request is sent so an unusable path costs no upstream
+  /// call. The transport still refuses to overwrite, so a file that appears
+  /// between this check and the write is caught there rather than clobbered.
+  public func destinationProblem(atPath path: String) -> DestinationProblem? {
+    let manager = FileManager.default
+    var isDirectory: ObjCBool = false
+    if manager.fileExists(atPath: path, isDirectory: &isDirectory) {
+      return isDirectory.boolValue ? .isDirectory : .alreadyExists
+    }
+    let parent = (path as NSString).deletingLastPathComponent
+    let resolved = parent.isEmpty ? FileManager.default.currentDirectoryPath : parent
+    var parentIsDirectory: ObjCBool = false
+    guard manager.fileExists(atPath: resolved, isDirectory: &parentIsDirectory),
+          parentIsDirectory.boolValue
+    else {
+      return .parentMissing
+    }
+    return manager.isWritableFile(atPath: resolved) ? nil : .parentNotWritable
   }
 }
 
@@ -72,12 +127,19 @@ public struct ArgumentCoercer: Sendable {
         }
         continue
       }
+      if parameter.binding == .destinationPath {
+        validated[parameter.name] = .destinationPath(
+          try destinationPath(raw, path: parameter.name)
+        )
+        continue
+      }
       validated[parameter.name] = try coerce(
         raw,
         type: parameter.type,
         path: parameter.name,
         capability: definition.id,
-        maximumPageSize: definition.maximumPageSize
+        maximumPageSize: definition.maximumPageSize,
+        maximumCount: parameter.maximumCount
       )
     }
     return validated
@@ -88,13 +150,14 @@ public struct ArgumentCoercer: Sendable {
     type: ArgumentValueType,
     path: String,
     capability: CapabilityID,
-    maximumPageSize: Int?
+    maximumPageSize: Int?,
+    maximumCount: Int? = nil
   ) throws -> ValidatedArgument {
     switch type {
     case .identifier:
       return .identifier(try identifier(value, path: path))
     case .identifierList:
-      let items = try list(value, path: path)
+      let items = try list(value, path: path, maximumCount: maximumCount)
       return .identifierList(
         try items.enumerated().map { try identifier($0.element, path: "\(path)[\($0.offset)]") }
       )
@@ -102,7 +165,7 @@ public struct ArgumentCoercer: Sendable {
       guard let text = value.stringValue else { throw typeError(path, "String", value) }
       return .string(text)
     case .stringList:
-      let items = try list(value, path: path)
+      let items = try list(value, path: path, maximumCount: maximumCount)
       return .stringList(try items.enumerated().map { entry in
         guard let text = entry.element.stringValue else {
           throw typeError("\(path)[\(entry.offset)]", "String", entry.element)
@@ -126,6 +189,19 @@ public struct ArgumentCoercer: Sendable {
         )
       }
       return .enumeration(text)
+    case .enumerationList(let name, let cases):
+      let items = try list(value, path: path, maximumCount: maximumCount)
+      return .stringList(try items.enumerated().map { entry in
+        guard let text = entry.element.stringValue else {
+          throw typeError("\(path)[\(entry.offset)]", name, entry.element)
+        }
+        guard cases.contains(text) else {
+          throw GatewayError.validation(
+            "Argument \(path)[\(entry.offset)] must be one of: \(cases.joined(separator: ", "))."
+          )
+        }
+        return text
+      })
     case .scope:
       return .scope(try scope(value, path: path))
     case .page:
@@ -164,7 +240,8 @@ public struct ArgumentCoercer: Sendable {
         type: field.type,
         path: "\(path).\(field.name)",
         capability: capability,
-        maximumPageSize: nil
+        maximumPageSize: nil,
+        maximumCount: field.maximumCount
       )
     }
     return validated
@@ -187,15 +264,44 @@ public struct ArgumentCoercer: Sendable {
     return text
   }
 
+  /// Validates a path the gateway will create. The check is local, so an
+  /// unusable destination never costs an upstream request or a credential.
+  private func destinationPath(_ value: WrikeValue, path: String) throws -> String {
+    guard let text = value.stringValue, !text.isEmpty else {
+      throw typeError(path, "String", value)
+    }
+    guard !text.contains("\0") else {
+      throw GatewayError(code: .fileOperationFailed, message: "\(path) is not a valid file path.")
+    }
+    if let problem = fileAccess.destinationProblem(atPath: text) {
+      throw GatewayError(
+        code: .fileOperationFailed,
+        message: "\(path) \(problem.summary).",
+        recoveryGuidance: problem.recovery
+      )
+    }
+    return text
+  }
+
   private func identifier(_ value: WrikeValue, path: String) throws -> WrikeIdentifier {
     guard let text = value.stringValue else { throw typeError(path, "ID", value) }
     return try WrikeIdentifier(validating: text, argumentName: path)
   }
 
-  private func list(_ value: WrikeValue, path: String) throws -> [WrikeValue] {
-    if let items = value.arrayValue { return items }
+  private func list(
+    _ value: WrikeValue,
+    path: String,
+    maximumCount: Int?
+  ) throws -> [WrikeValue] {
     // GraphQL list input coercion accepts a single value as a one-item list.
-    return [value]
+    let items = value.arrayValue ?? [value]
+    if let maximumCount, items.count > maximumCount {
+      throw GatewayError.validation(
+        "Argument \(path) accepts at most \(maximumCount) values but received \(items.count).",
+        recovery: "Split the request into batches of \(maximumCount) or fewer."
+      )
+    }
+    return items
   }
 
   private func scope(_ value: WrikeValue, path: String) throws -> ScopeInput {

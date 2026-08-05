@@ -250,6 +250,49 @@ struct ReaderCommandEndToEndTests {
     #expect(!outcome.standardOutput.contains("FAKE-STATUS-TOKEN"))
   }
 
+  @Test("auth status fails loudly when the credential store cannot answer")
+  func authStatusSurfacesStoreFailure() async throws {
+    // The failure this covers is misreporting an unreadable store as an empty
+    // one: `mode: null` with exit 0 tells an operator to run `auth oauth2` and
+    // burn a fresh authorization on a vault that already holds a valid,
+    // rotatable refresh token, when the fix is `kinko unlock`.
+    let frame = try FrameHarness.reader(
+      transport: taskTransport(),
+      store: UnavailableCredentialStore(),
+      environment: StaticEnvironmentReader([
+        .clientID: "fake-client-id",
+        .clientSecret: "fake-client-secret"
+      ])
+    )
+    let outcome = await frame.run(arguments: ["auth", "status"])
+
+    #expect(outcome.exitCode == .localResource)
+    #expect(outcome.standardOutput.contains("FILE_OPERATION_FAILED"))
+    #expect(outcome.standardOutput.contains("kinko unlock"))
+    #expect(!outcome.standardOutput.contains("\"mode\":null"))
+    #expect(!outcome.standardOutput.contains("\"refreshStateAvailable\":false"))
+  }
+
+  @Test("auth status reports a rejected permanent-token base URL instead of a null host")
+  func authStatusSurfacesInvalidBaseURL() async throws {
+    // Permanent-token mode has no host default, so a missing or rejected base
+    // URL makes every later query fail. Status names it here rather than
+    // reporting a usable-looking `permanentToken` mode with a null host.
+    let frame = try FrameHarness.reader(
+      transport: taskTransport(),
+      environment: StaticEnvironmentReader([
+        .accessToken: "FAKE-STATUS-TOKEN-do-not-log"
+      ])
+    )
+    let outcome = await frame.run(arguments: ["auth", "status"])
+
+    #expect(outcome.exitCode == .credential)
+    #expect(outcome.standardOutput.contains("AUTHENTICATION_FAILED"))
+    #expect(outcome.standardOutput.contains(GatewayEnvironmentKey.apiBaseURL.rawValue))
+    #expect(!outcome.standardOutput.contains("\"mode\":\"permanentToken\""))
+    #expect(!outcome.standardOutput.contains("FAKE-STATUS-TOKEN"))
+  }
+
   @Test("auth logout reports whether a local record was removed")
   func authLogout() async throws {
     let frame = try FrameHarness.reader(transport: taskTransport())
@@ -382,6 +425,65 @@ struct TypedSDKSurfaceTests {
 
     #expect(task["title"]?.stringValue == "Prepare launch")
     #expect(try await transport.firstRequest().capabilityID == CapabilityID("tasks.get"))
+  }
+
+  @Test("The reader SDK builds the same history request the GraphQL field does")
+  func readerClientHistory() async throws {
+    let transport = RecordingTransport.succeeding(
+      json: WrikeFixtures.envelope(kind: "tasksHistory", data: WrikeFixtures.tasksHistory)
+    )
+    let client = try WrikeReadClient(
+      transport: transport,
+      credentials: StubCredentialProvider(),
+      clock: TestClock()
+    )
+
+    let history = try await client.tasksHistory(
+      ids: ["IEAAAAAAKQAB5FNY", "IEAAAAAAKQAB5FNZ"],
+      updatedDate: WrikeInstantRange(start: "2026-01-01T00:00:00Z"),
+      fields: ["plannedCost"]
+    )
+
+    #expect(history.arrayValue?.first?["id"]?.stringValue == "IEAAAAAAKQAB5FNY")
+    let recorded = try await transport.firstRequest()
+    #expect(recorded.capabilityID == CapabilityID("tasks.history"))
+    #expect(recorded.path == "/api/v4/tasks/IEAAAAAAKQAB5FNY,IEAAAAAAKQAB5FNZ/tasks_history")
+    #expect(recorded.query["updatedDate"] == "{\"start\":\"2026-01-01T00:00:00Z\"}")
+    #expect(recorded.query["fields"] == "[\"plannedCost\"]")
+  }
+
+  @Test("The reader SDK downloads through the same file sink the GraphQL field uses")
+  func readerClientDownload() async throws {
+    let directory = try TemporaryDirectory()
+    let destination = directory.path("brief.pdf")
+    let transport = RecordingTransport(outcomes: [
+      .response(
+        WrikeResponse(
+          statusCode: 200,
+          headers: ["Content-Type": "application/pdf"],
+          body: Data("SDK-DOWNLOAD-BYTES".utf8)
+        )
+      )
+    ])
+    let client = try WrikeReadClient(
+      transport: transport,
+      credentials: StubCredentialProvider(),
+      clock: TestClock()
+    )
+
+    let file = try await client.attachmentDownload(
+      id: "IEAAAAAAIYAAAAAB",
+      destination: destination
+    )
+
+    #expect(file["path"]?.stringValue == destination)
+    #expect(file["byteCount"]?.intValue == 18)
+    #expect(file["contentType"]?.stringValue == "application/pdf")
+    // The SDK result describes the file; the bytes are only in the file.
+    #expect(!file.encodedJSON(pretty: false).contains("SDK-DOWNLOAD-BYTES"))
+    let written = try #require(FileManager.default.contents(atPath: destination))
+    #expect(String(data: written, encoding: .utf8) == "SDK-DOWNLOAD-BYTES")
+    #expect(try await transport.firstRequest().responseSink == .file(path: destination))
   }
 
   @Test("The writer SDK is cumulative and exposes its reader client")

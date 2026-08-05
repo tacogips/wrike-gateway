@@ -207,14 +207,22 @@ public struct FixedStateGenerator: StateGenerator {
   public func makeState() -> SecretValue { SecretValue(state) }
 }
 
-/// Declares a fixed set of readable regular files.
+/// Declares a fixed set of readable regular files and a fixed verdict for each
+/// destination path, so destination validation can be exercised without
+/// creating real directories.
 public struct StubFileAccess: FileAccess {
   private let readable: Set<String>
   private let sizes: [String: Int]
+  private let destinationProblems: [String: DestinationProblem]
 
-  public init(readable: Set<String>, sizes: [String: Int] = [:]) {
+  public init(
+    readable: Set<String>,
+    sizes: [String: Int] = [:],
+    destinationProblems: [String: DestinationProblem] = [:]
+  ) {
     self.readable = readable
     self.sizes = sizes
+    self.destinationProblems = destinationProblems
   }
 
   public func isReadableRegularFile(atPath path: String) -> Bool {
@@ -223,6 +231,10 @@ public struct StubFileAccess: FileAccess {
 
   public func fileSize(atPath path: String) -> Int? {
     sizes[path]
+  }
+
+  public func destinationProblem(atPath path: String) -> DestinationProblem? {
+    destinationProblems[path]
   }
 }
 

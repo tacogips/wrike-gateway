@@ -160,10 +160,21 @@ public actor CredentialResolver: CredentialProvider {
 
   /// Builds the safe `auth status` report without reading token values into
   /// any formatted output.
-  public func status(hasCallbackIdentity: Bool) async -> AuthStatusReport {
+  ///
+  /// A thrown error and a `nil` mode mean different things and must not be
+  /// collapsed into one another. `nil` means the process holds no credential:
+  /// no access token, no client configuration, or a store that answered and had
+  /// no record. A throw means the answer is unknown, because the credential
+  /// store could not be read or the permanent-token configuration is invalid.
+  /// Reporting the second case as the first tells an operator to re-authorize a
+  /// vault that already holds a valid refresh token, so both failures propagate.
+  public func status(hasCallbackIdentity: Bool) async throws -> AuthStatusReport {
     let hasClient = OAuthClientConfiguration.resolve(from: environment) != nil
     if environment.nonEmptyValue(for: .accessToken) != nil {
-      let host = (try? permanentTokenCredential())?.baseURL.host
+      // A rejected or missing base URL is a real misconfiguration; permanent
+      // token mode has no host default to fall back on, so it is reported
+      // rather than flattened into `host: null`.
+      let host = try permanentTokenCredential()?.baseURL.host
       return AuthStatusReport(
         mode: .permanentToken,
         host: host,
@@ -175,7 +186,7 @@ public actor CredentialResolver: CredentialProvider {
         hasCallbackTLSIdentity: hasCallbackIdentity
       )
     }
-    let state = try? await loadState()
+    let state = try await loadState()
     return AuthStatusReport(
       mode: state == nil ? nil : .oauth2,
       host: state?.host,

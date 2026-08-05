@@ -42,6 +42,45 @@ public enum WrikeRequestBody: Sendable, Equatable {
   case file(FileUploadBody)
 }
 
+/// Where a transport must put the response body.
+///
+/// Wrike's attachment download and preview routes answer with an
+/// `application/octet-stream` body that has no place in the JSON envelope and
+/// must never be held in a diagnosable value. Selecting `.file` moves the
+/// success body straight to disk, so the bytes exist only in the destination
+/// file and never in a `WrikeResponse`, an error description, or a log line.
+public enum WrikeResponseSink: Sendable, Equatable {
+  case memory
+  case file(path: String)
+
+  /// Only a success body is content. A `4xx`/`5xx` body is the documented JSON
+  /// error envelope, so it stays in memory for the error mapper and never
+  /// reaches the caller's destination path.
+  public static func isSuccess(status: Int) -> Bool { (200..<300).contains(status) }
+
+  public var destinationPath: String? {
+    if case .file(let path) = self { return path }
+    return nil
+  }
+}
+
+/// The result of writing a success body to the caller's destination path.
+///
+/// It describes the file rather than its contents: no field of this value can
+/// hold a byte of the downloaded attachment.
+public struct DownloadedFile: Sendable, Equatable {
+  public let path: String
+  public let byteCount: Int
+  /// The upstream `Content-Type`, preserved verbatim when Wrike sent one.
+  public let contentType: String?
+
+  public init(path: String, byteCount: Int, contentType: String?) {
+    self.path = path
+    self.byteCount = byteCount
+    self.contentType = contentType
+  }
+}
+
 /// A capability-scoped request expressed in relative terms. Public SDK and
 /// GraphQL callers never supply a raw URL, method, or query parameter; the
 /// capability adapter is the only producer of this value.
@@ -54,6 +93,9 @@ public struct WrikeRequest: Sendable, Equatable {
   public let headers: [String: String]
   public let body: WrikeRequestBody
   public let timeout: TimeInterval
+  /// Where the success body must go. Selected by the capability's declaration,
+  /// never by a caller-supplied flag.
+  public let responseSink: WrikeResponseSink
 
   public init(
     capabilityID: CapabilityID,
@@ -62,7 +104,8 @@ public struct WrikeRequest: Sendable, Equatable {
     queryItems: [WrikeQueryItem] = [],
     headers: [String: String] = [:],
     body: WrikeRequestBody = .none,
-    timeout: TimeInterval = 60
+    timeout: TimeInterval = 60,
+    responseSink: WrikeResponseSink = .memory
   ) {
     self.capabilityID = capabilityID
     self.method = method
@@ -71,6 +114,7 @@ public struct WrikeRequest: Sendable, Equatable {
     self.headers = headers
     self.body = body
     self.timeout = timeout
+    self.responseSink = responseSink
   }
 }
 
@@ -89,6 +133,7 @@ public struct PreparedRequest: Sendable {
   public let timeout: TimeInterval
   public let capabilityID: CapabilityID
   public let requestID: String
+  public let responseSink: WrikeResponseSink
 
   public init(
     url: URL,
@@ -98,7 +143,8 @@ public struct PreparedRequest: Sendable {
     body: WrikeRequestBody,
     timeout: TimeInterval,
     capabilityID: CapabilityID,
-    requestID: String
+    requestID: String,
+    responseSink: WrikeResponseSink = .memory
   ) {
     self.url = url
     self.method = method
@@ -108,6 +154,7 @@ public struct PreparedRequest: Sendable {
     self.timeout = timeout
     self.capabilityID = capabilityID
     self.requestID = requestID
+    self.responseSink = responseSink
   }
 
   public var hasAuthorization: Bool { bearerToken != nil }
@@ -118,13 +165,23 @@ public struct WrikeResponse: Sendable, Equatable {
   /// Header names are lowercased so lookups do not depend on server casing.
   public let headers: [String: String]
   public let body: Data
+  /// Set only when the request selected a file sink and the status was a
+  /// success. `body` is then empty, which is what keeps attachment bytes out of
+  /// every diagnostic that can reach an operator.
+  public let downloadedFile: DownloadedFile?
 
-  public init(statusCode: Int, headers: [String: String] = [:], body: Data = Data()) {
+  public init(
+    statusCode: Int,
+    headers: [String: String] = [:],
+    body: Data = Data(),
+    downloadedFile: DownloadedFile? = nil
+  ) {
     self.statusCode = statusCode
     self.headers = headers.reduce(into: [:]) { result, entry in
       result[entry.key.lowercased()] = entry.value
     }
     self.body = body
+    self.downloadedFile = downloadedFile
   }
 
   public func header(_ name: String) -> String? { headers[name.lowercased()] }

@@ -54,12 +54,46 @@ public enum ResponseProjection {
     return token
   }
 
+  /// Builds the full stable result for a capability from a transport response.
+  ///
+  /// A file-output capability is projected from the transport's write outcome
+  /// rather than from a body, because its success body was streamed to the
+  /// caller's destination path and is deliberately not in memory.
+  public static func result(
+    for definition: CapabilityDefinition,
+    response: WrikeResponse
+  ) throws -> WrikeValue {
+    guard case .fileOutput(let shape) = definition.result else {
+      return try result(for: definition, body: response.body)
+    }
+    guard let file = response.downloadedFile else {
+      throw GatewayError(
+        code: .upstreamResponseInvalid,
+        message: "Wrike returned no content for \(definition.field).",
+        capabilityID: definition.id
+      )
+    }
+    return try project(
+      .object([
+        "path": .string(file.path),
+        "byteCount": .int(file.byteCount),
+        "contentType": file.contentType.map(WrikeValue.string) ?? .null
+      ]),
+      shape: shape,
+      capability: definition.id
+    )
+  }
+
   /// Builds the full stable result for a capability from a response body.
   public static func result(
     for definition: CapabilityDefinition,
     body: Data
   ) throws -> WrikeValue {
     switch definition.result {
+    case .fileOutput:
+      throw GatewayError.internalFailure(
+        "\(definition.id) writes its body to a file and cannot be projected from memory."
+      )
     case .single(let shape):
       let items = try envelopeData(body, capability: definition.id)
       guard let first = items.first else {

@@ -98,5 +98,55 @@ public enum FolderCapabilities {
     summary: "Returns one folder by its opaque identifier."
   )
 
-  public static let all: [CapabilityDefinition] = [list, get]
+  /// Budget-metric history Wrike returns from `folders_history`. The metrics
+  /// live under `project`, so a folder that is not a project carries an empty
+  /// history rather than a different shape.
+  public static let projectHistory = ModelShape(
+    typeName: "FolderProjectHistory",
+    fields: [
+      ModelField("plannedCost", .objectList(HistoryModels.budgetMetricItem)),
+      ModelField("plannedFees", .objectList(HistoryModels.budgetMetricItem)),
+      ModelField("actualCost", .objectList(HistoryModels.budgetMetricItem)),
+      ModelField("actualFees", .objectList(HistoryModels.budgetMetricItem)),
+      ModelField("budget", .objectList(HistoryModels.budgetMetricItem))
+    ]
+  )
+
+  public static let changeHistory = ModelShape(
+    typeName: "FolderChangeHistory",
+    fields: [
+      ModelField("id", .identifier, required: true),
+      ModelField("project", .object(projectHistory))
+    ]
+  )
+
+  /// Budget-metric history for one or more folders or projects.
+  ///
+  /// Route and filters follow the official reference for
+  /// `GET /folders/{folderIds}/folders_history`, which accepts an `updatedDate`
+  /// instant range and a `fields` selection of `plannedCost`, `plannedFees`,
+  /// `actualCost`, `actualFees`, and `budget`.
+  public static let historyFields = [
+    "plannedCost", "plannedFees", "actualCost", "actualFees", "budget"
+  ]
+
+  public static let history = CapabilityDefinition(
+    id: CapabilityID("folders.history"),
+    field: "foldersHistory",
+    tier: .reader,
+    operationClass: .read,
+    method: .get,
+    pathTemplate: "/folders/{folderIds}/folders_history",
+    arguments: [
+      HistoryModels.identifierArgument(placeholder: "folderIds")
+    ] + HistoryModels.filterArguments(
+      fieldEnum: "FolderHistoryField",
+      values: historyFields
+    ),
+    result: .list(changeHistory),
+    scopes: .workspaceRead,
+    summary: "Returns budget-metric history for the given folders or projects."
+  )
+
+  public static let all: [CapabilityDefinition] = [list, get, history]
 }

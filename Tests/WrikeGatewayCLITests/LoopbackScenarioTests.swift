@@ -285,6 +285,84 @@ struct LoopbackScenarioTests {
     }
   }
 
+  @Test("An attachment download streams to disk over real HTTP")
+  func attachmentDownloadStreams() async throws {
+    let directory = try TemporaryDirectory()
+    let destination = directory.path("brief.pdf")
+    // A distinctive marker so a byte leak into output would be unmistakable.
+    let payload = String(repeating: "DOWNLOAD-BYTES-MARKER-9f2e;", count: 160)
+
+    try await withServer(responses: [
+      .init(headers: ["Content-Type": "application/octet-stream"], body: payload)
+    ]) { runtime, server in
+      let response = await runtime.execute(document: """
+        { attachmentDownload(id: "IEAAAAAAIYAAAAAB", destination: "\(destination)") \
+        { path byteCount contentType } }
+        """)
+
+      #expect(response.errors.isEmpty, "\(response.errors)")
+      let observed = try #require(server.observedRequests.first)
+      #expect(observed.method == "GET")
+      #expect(observed.target == "/api/v4/attachments/IEAAAAAAIYAAAAAB/download")
+
+      let written = try #require(FileManager.default.contents(atPath: destination))
+      #expect(String(data: written, encoding: .utf8) == payload)
+
+      let file = try #require(response.data?["attachmentDownload"])
+      #expect(file["byteCount"]?.intValue == payload.utf8.count)
+      #expect(file["contentType"]?.stringValue == "application/octet-stream")
+
+      // The bytes exist in the file and nowhere else.
+      let rendered = response.rendered(pretty: false)
+      #expect(!rendered.contains("DOWNLOAD-BYTES-MARKER"))
+      #expect(rendered.contains("brief.pdf"))
+    }
+  }
+
+  @Test("A refused download maps the upstream error and leaves no file behind")
+  func attachmentDownloadFailureWritesNothing() async throws {
+    let directory = try TemporaryDirectory()
+    let destination = directory.path("brief.pdf")
+
+    try await withServer(responses: [
+      .init(status: 403, body: """
+        {"error":"access_forbidden","errorDescription":"DOWNLOAD-LEAK-MARKER-4c10"}
+        """)
+    ]) { runtime, _ in
+      let response = await runtime.execute(document: """
+        { attachmentDownload(id: "IEAAAAAAIYAAAAAB", destination: "\(destination)") { path } }
+        """)
+
+      #expect(response.errors.first?.code == .authorizationFailed)
+      // The JSON error envelope is not the attachment, so it must not be
+      // written to the path the caller believes now holds their file.
+      #expect(!FileManager.default.fileExists(atPath: destination))
+      #expect(!response.rendered(pretty: false).contains("DOWNLOAD-LEAK-MARKER"))
+    }
+  }
+
+  @Test("A preview request carries its curated size on the wire")
+  func attachmentPreviewSendsSize() async throws {
+    let directory = try TemporaryDirectory()
+    let destination = directory.path("preview.png")
+
+    try await withServer(responses: [
+      .init(headers: ["Content-Type": "image/png"], body: "PNG-PREVIEW-BYTES")
+    ]) { runtime, server in
+      let response = await runtime.execute(document: """
+        { attachmentPreview(id: "IEAAAAAAIYAAAAAB", destination: "\(destination)", \
+        size: "w200") { path byteCount contentType } }
+        """)
+
+      #expect(response.errors.isEmpty, "\(response.errors)")
+      let observed = try #require(server.observedRequests.first)
+      #expect(observed.target == "/api/v4/attachments/IEAAAAAAIYAAAAAB/preview?size=w200")
+      #expect(
+        response.data?["attachmentPreview"]?["contentType"]?.stringValue == "image/png"
+      )
+    }
+  }
+
   @Test("Independent read fields execute against separate upstream requests")
   func multipleTopLevelReads() async throws {
     try await withServer(responses: [

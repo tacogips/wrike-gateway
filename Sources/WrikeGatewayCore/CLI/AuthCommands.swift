@@ -75,8 +75,19 @@ public struct AuthCommands: Sendable {
     let hasIdentity = (try? identityLoader.loadIdentity(
       label: WrikeOAuthEndpoints.callbackIdentityLabel
     )) != nil
-    let report = await resolver.status(hasCallbackIdentity: hasIdentity)
-    return Self.success(report.stableValue)
+    do {
+      // A credential store that cannot answer is not an empty store. Surfacing
+      // the error keeps the `kinko unlock` guidance intact instead of reporting
+      // a locked vault as "no credential is configured".
+      let report = try await resolver.status(hasCallbackIdentity: hasIdentity)
+      return Self.success(report.stableValue)
+    } catch let error as GatewayError {
+      return Self.failure(error)
+    } catch {
+      return Self.failure(
+        GatewayError(code: .fileOperationFailed, message: "The credential store could not be read.")
+      )
+    }
   }
 
   public func logout() async throws -> CommandOutcome {

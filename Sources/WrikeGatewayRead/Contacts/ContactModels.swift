@@ -46,4 +46,16 @@ public enum ContactModels {
       ModelField("location", .string)
     ]
   )
+
+  /// The rate history Wrike returns from `contacts_history`. It carries no
+  /// contact attributes of its own beyond the id, so it is a separate shape
+  /// rather than extra fields on `Contact`.
+  public static let changeHistory = ModelShape(
+    typeName: "ContactChangeHistory",
+    fields: [
+      ModelField("id", .identifier, required: true),
+      ModelField("billRateHistory", .objectList(HistoryModels.rateItem)),
+      ModelField("costRateHistory", .objectList(HistoryModels.rateItem))
+    ]
+  )
 }
