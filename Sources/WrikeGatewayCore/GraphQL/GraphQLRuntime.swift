@@ -127,13 +127,17 @@ public struct GraphQLRuntime: Sendable {
         referenced.formUnion(value.referencedVariables)
       }
     }
-    for name in referenced.subtracting(declared) {
+    // Each set is sorted before it is reported. Set iteration order varies
+    // between runs, so an unsorted loop would name an arbitrary one of several
+    // offending variables and the same document could produce a different
+    // message every time.
+    for name in referenced.subtracting(declared).sorted() {
       throw GatewayError.validation("Variable $\(name) is used but not declared by the operation.")
     }
-    for name in declared.subtracting(referenced) {
+    for name in declared.subtracting(referenced).sorted() {
       throw GatewayError.validation("Variable $\(name) is declared but never used.")
     }
-    for name in variables.keys where !declared.contains(name) {
+    for name in variables.keys.sorted() where !declared.contains(name) {
       throw GatewayError.validation("Variable $\(name) was supplied but is not declared by the operation.")
     }
     for definition in operation.variableDefinitions where definition.isRequired {

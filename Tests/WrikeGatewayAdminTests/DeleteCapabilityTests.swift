@@ -111,7 +111,7 @@ struct AdminDeleteContractTests {
     let transport = RecordingTransport.succeeding(
       json: AdminCases.deletionEnvelope(kind: "ids", identifier: testCase.identifier)
     )
-    let response = await try AdminCases.runtime(transport: transport)
+    let response = try await AdminCases.runtime(transport: transport)
       .execute(document: testCase.document)
 
     #expect(response.errors.isEmpty, "\(testCase.name): \(response.errors)")
@@ -127,7 +127,7 @@ struct AdminDeleteContractTests {
     let transport = RecordingTransport.succeeding(
       json: AdminCases.deletionEnvelope(kind: "ids", identifier: testCase.identifier)
     )
-    let response = await try AdminCases.runtime(transport: transport)
+    let response = try await AdminCases.runtime(transport: transport)
       .execute(document: testCase.document)
 
     #expect(
@@ -141,7 +141,7 @@ struct AdminDeleteContractTests {
     let transport = RecordingTransport.succeeding(
       json: "{\"kind\":\"entities\",\"data\":[{\"id\":\"\(testCase.identifier)\"}]}"
     )
-    let response = await try AdminCases.runtime(transport: transport)
+    let response = try await AdminCases.runtime(transport: transport)
       .execute(document: testCase.document)
 
     #expect(
@@ -153,7 +153,7 @@ struct AdminDeleteContractTests {
   @Test("An unconfirmed delete is outcome-unknown, never an echo of the request", arguments: AdminCases.all)
   func emptyEnvelopeIsOutcomeUnknown(testCase: AdminCase) async throws {
     let transport = RecordingTransport.succeeding(json: "{\"kind\":\"ids\",\"data\":[]}")
-    let response = await try AdminCases.runtime(transport: transport)
+    let response = try await AdminCases.runtime(transport: transport)
       .execute(document: testCase.document)
 
     let error = try #require(response.errors.first, "\(testCase.name)")
@@ -168,7 +168,7 @@ struct AdminDeleteContractTests {
   @Test("A delete never retries and never infers success", arguments: AdminCases.all)
   func neverRetriesOrInfersSuccess(testCase: AdminCase) async throws {
     let transport = RecordingTransport(outcomes: [.failure(.connectivity("dropped"))])
-    let response = await try AdminCases.runtime(transport: transport)
+    let response = try await AdminCases.runtime(transport: transport)
       .execute(document: testCase.document)
 
     let error = try #require(response.errors.first, "\(testCase.name)")
@@ -183,7 +183,7 @@ struct AdminDeleteContractTests {
     let transport = RecordingTransport(outcomes: [
       .response(WrikeResponse(statusCode: 500, body: Data("{}".utf8)))
     ])
-    let response = await try AdminCases.runtime(transport: transport)
+    let response = try await AdminCases.runtime(transport: transport)
       .execute(document: testCase.document)
 
     let error = try #require(response.errors.first, "\(testCase.name)")
@@ -195,7 +195,7 @@ struct AdminDeleteContractTests {
   @Test("A delete requires its explicit identifier", arguments: AdminCases.all)
   func requiresIdentifier(testCase: AdminCase) async throws {
     let transport = RecordingTransport.succeeding(json: "{}")
-    let response = await try AdminCases.runtime(transport: transport)
+    let response = try await AdminCases.runtime(transport: transport)
       .execute(document: "mutation { \(testCase.definition.field)(input: {}) { deletedId } }")
 
     #expect(response.errors.first?.code == .validationError, "\(testCase.name)")

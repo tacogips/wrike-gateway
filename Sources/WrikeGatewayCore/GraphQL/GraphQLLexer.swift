@@ -137,15 +137,7 @@ struct GraphQLLexer {
         case "b": value.append("\u{08}")
         case "f": value.append("\u{0C}")
         case "u":
-          let start = index + 1
-          guard start + 3 < characters.count,
-                let scalarValue = UInt32(String(characters[start...(start + 3)]), radix: 16),
-                let scalar = Unicode.Scalar(scalarValue)
-          else {
-            throw GatewayError.validation("Invalid unicode escape in a GraphQL string.")
-          }
-          value.unicodeScalars.append(scalar)
-          index += 4
+          value.unicodeScalars.append(try readUnicodeEscape())
         default:
           throw GatewayError.validation("Invalid escape sequence in a GraphQL string.")
         }
@@ -159,5 +151,47 @@ struct GraphQLLexer {
       index += 1
     }
     throw GatewayError.validation("Unterminated string literal in the GraphQL document.")
+  }
+
+  /// Reads one `\u` escape, pairing a leading surrogate with the escape that
+  /// follows it.
+  ///
+  /// A character outside the basic multilingual plane, such as an emoji in a
+  /// task title, is escaped in GraphQL as a surrogate pair. Reading each half
+  /// on its own yields no scalar, so a document that is valid under the
+  /// contract would be rejected for a syntax it is required to accept.
+  private mutating func readUnicodeEscape() throws -> Unicode.Scalar {
+    let leading = try readHexQuad()
+    if let scalar = Unicode.Scalar(leading) { return scalar }
+    // Only an unpaired surrogate reaches here. A high one may still be
+    // completed by the next escape; anything else is malformed.
+    guard (0xD800...0xDBFF).contains(leading),
+          index + 2 < characters.count,
+          characters[index + 1] == "\\",
+          characters[index + 2] == "u"
+    else {
+      throw GatewayError.validation("Invalid unicode escape in a GraphQL string.")
+    }
+    index += 2
+    let trailing = try readHexQuad()
+    guard (0xDC00...0xDFFF).contains(trailing),
+          let scalar = Unicode.Scalar(0x10000 + ((leading - 0xD800) << 10) + (trailing - 0xDC00))
+    else {
+      throw GatewayError.validation("Invalid unicode escape in a GraphQL string.")
+    }
+    return scalar
+  }
+
+  /// Reads the four hex digits after a `\u`, leaving `index` on the last digit
+  /// so the caller's single advance moves past the escape.
+  private mutating func readHexQuad() throws -> UInt32 {
+    let start = index + 1
+    guard start + 3 < characters.count,
+          let value = UInt32(String(characters[start...(start + 3)]), radix: 16)
+    else {
+      throw GatewayError.validation("Invalid unicode escape in a GraphQL string.")
+    }
+    index += 4
+    return value
   }
 }

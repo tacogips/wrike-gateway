@@ -422,7 +422,7 @@ struct WriterCapabilityContractTests {
     let transport = RecordingTransport.succeeding(
       json: WrikeFixtures.envelope(kind: testCase.responseKind, data: testCase.responseData)
     )
-    let response = await try WriterCases.runtime(transport: transport)
+    let response = try await WriterCases.runtime(transport: transport)
       .execute(document: testCase.document)
 
     #expect(response.errors.isEmpty, "\(testCase.name): \(response.errors)")
@@ -437,7 +437,7 @@ struct WriterCapabilityContractTests {
     let transport = RecordingTransport(outcomes: [
       .response(WrikeResponse(statusCode: 400, body: Data(WrikeFixtures.errorBody.utf8)))
     ])
-    let response = await try WriterCases.runtime(transport: transport)
+    let response = try await WriterCases.runtime(transport: transport)
       .execute(document: testCase.document)
 
     let error = try #require(response.errors.first, "\(testCase.name)")
@@ -448,7 +448,7 @@ struct WriterCapabilityContractTests {
   @Test("No writer mutation retries after a transport failure", arguments: WriterCases.all)
   func neverRetries(testCase: WriterCase) async throws {
     let transport = RecordingTransport(outcomes: [.failure(.timedOut)])
-    let response = await try WriterCases.runtime(transport: transport)
+    let response = try await WriterCases.runtime(transport: transport)
       .execute(document: testCase.document)
 
     let error = try #require(response.errors.first, "\(testCase.name)")
@@ -503,7 +503,7 @@ struct WriterBoundaryTests {
   @Test("A delete mutation is denied by the writer registry, naming the admin tier")
   func deniesDeleteMutation() async throws {
     let transport = RecordingTransport.succeeding(json: "{}")
-    let response = await try WriterCases.runtime(transport: transport).execute(
+    let response = try await WriterCases.runtime(transport: transport).execute(
       document: "mutation { deleteTask(input: {taskId: \"IEAAAAAAKQAB5FNY\"}) { deletedId } }"
     )
 
@@ -540,7 +540,7 @@ struct WriterBoundaryTests {
     let transport = RecordingTransport.succeeding(
       json: WrikeFixtures.envelope(kind: "attachments", data: WrikeFixtures.attachment)
     )
-    let response = await try WriterCases.runtime(transport: transport).execute(document: """
+    let response = try await WriterCases.runtime(transport: transport).execute(document: """
       mutation { uploadTaskAttachment(input: {taskId: "IEAAAAAAKQAB5FNY", \
       filePath: "\(WriterCases.uploadPath)"}) { attachment { id name } } }
       """)
@@ -554,7 +554,7 @@ struct WriterBoundaryTests {
   @Test("An upload naming an unreadable file fails locally")
   func rejectsUnreadableUpload() async throws {
     let transport = RecordingTransport.succeeding(json: "{}")
-    let response = await try WriterCases.runtime(transport: transport).execute(document: """
+    let response = try await WriterCases.runtime(transport: transport).execute(document: """
       mutation { uploadTaskAttachment(input: {taskId: "IEAAAAAAKQAB5FNY", \
       filePath: "/tmp/definitely-not-present"}) { attachment { id } } }
       """)
@@ -589,7 +589,7 @@ struct WriterBoundaryTests {
   @Test("A comment creation without a scope is rejected before transport")
   func commentRequiresScope() async throws {
     let transport = RecordingTransport.succeeding(json: "{}")
-    let response = await try WriterCases.runtime(transport: transport)
+    let response = try await WriterCases.runtime(transport: transport)
       .execute(document: "mutation { createComment(input: {text: \"Hi\"}) { comment { id } } }")
 
     #expect(response.errors.first?.code == .validationError)

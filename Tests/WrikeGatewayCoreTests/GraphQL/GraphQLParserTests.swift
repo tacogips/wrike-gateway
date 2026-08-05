@@ -34,6 +34,55 @@ struct GraphQLParserScopeTests {
     #expect(argument != .string("Completed"))
   }
 
+  /// Wrike titles and comments carry real text, so a string argument has to
+  /// survive escaping intact. A character outside the basic multilingual plane
+  /// is expressed as a surrogate pair, which is only meaningful when both
+  /// halves are read together.
+  @Test("String escapes decode, including a surrogate pair")
+  func decodesStringEscapes() throws {
+    // A raw Swift literal, so every backslash below reaches the lexer as the
+    // escape the GraphQL document actually contains rather than one Swift has
+    // already decoded.
+    let document = try parser.parse(
+      #"{ task(id: "a\tb\"c\\d\u0041\u00E9\uD83D\uDE00z") { id } }"#
+    )
+    let argument = document.operation.selections.first?.arguments["id"]
+    // The last two escapes are one surrogate pair and must decode to the single
+    // scalar they name, not to two unpaired halves.
+    #expect(argument == .string("a\tb\"c\\dA\u{E9}\u{1F600}z"))
+  }
+
+  struct MalformedEscape: Sendable, CustomTestStringConvertible {
+    let name: String
+    let document: String
+    var testDescription: String { name }
+  }
+
+  /// A half-formed surrogate is still malformed. Accepting one would put an
+  /// unpaired scalar into an upstream request.
+  @Test(
+    "A malformed unicode escape is rejected",
+    arguments: [
+      MalformedEscape(name: "lone high surrogate", document: #"{ task(id: "\uD83D") { id } }"#),
+      MalformedEscape(name: "lone low surrogate", document: #"{ task(id: "\uDE00") { id } }"#),
+      MalformedEscape(
+        name: "high surrogate followed by a plain escape",
+        document: #"{ task(id: "\uD83D\n") { id } }"#
+      ),
+      MalformedEscape(
+        name: "high surrogate followed by a non-surrogate",
+        document: #"{ task(id: "\uD83DA") { id } }"#
+      ),
+      MalformedEscape(name: "truncated escape", document: #"{ task(id: "\u12") { id } }"#),
+      MalformedEscape(name: "non-hex escape", document: #"{ task(id: "\uZZZZ") { id } }"#)
+    ]
+  )
+  func rejectsMalformedUnicodeEscape(testCase: MalformedEscape) throws {
+    #expect(throws: GatewayError.self, "\(testCase.name) must be rejected") {
+      _ = try self.parser.parse(testCase.document)
+    }
+  }
+
   /// A document using syntax outside the constrained subset.
   struct UnsupportedDocument: Sendable, CustomTestStringConvertible {
     let name: String
@@ -163,7 +212,7 @@ struct GraphQLPreNetworkValidationTests {
   func failsBeforeTransport(testCase: RejectedDocument) async throws {
     let name = testCase.name
     let transport = RecordingTransport.succeeding(json: "{}")
-    let response = await try runtime(transport: transport).execute(document: testCase.document)
+    let response = try await runtime(transport: transport).execute(document: testCase.document)
 
     #expect(response.errors.first?.code == testCase.code, "\(name)")
     #expect(response.data == nil)
@@ -246,7 +295,7 @@ struct GraphQLPreNetworkValidationTests {
   @Test("A declared but unused variable is rejected")
   func rejectsUnusedVariable() async throws {
     let transport = RecordingTransport.succeeding(json: "{}")
-    let response = await try runtime(transport: transport)
+    let response = try await runtime(transport: transport)
       .execute(document: "query Q($unused: ID!) { account { id } }", variables: ["unused": .string("x")])
     #expect(response.errors.first?.code == .validationError)
     #expect(await transport.requestCount == 0)
@@ -255,16 +304,35 @@ struct GraphQLPreNetworkValidationTests {
   @Test("A supplied but undeclared variable is rejected")
   func rejectsUndeclaredVariable() async throws {
     let transport = RecordingTransport.succeeding(json: "{}")
-    let response = await try runtime(transport: transport)
+    let response = try await runtime(transport: transport)
       .execute(document: "{ widget(id: \"1\") { id } }", variables: ["extra": .string("x")])
     #expect(response.errors.first?.code == .validationError)
+    #expect(await transport.requestCount == 0)
+  }
+
+  /// The same rejected document must produce the same message every run. The
+  /// offending names are collected in a set, whose iteration order varies
+  /// between processes, so the report is sorted before one name is chosen.
+  @Test("A document with several offending variables always names the same one")
+  func variableRejectionIsDeterministic() async throws {
+    let transport = RecordingTransport.succeeding(json: "{}")
+    let executed = try runtime(transport: transport)
+    for _ in 0..<8 {
+      let response = await executed.execute(
+        document: "query Q($zeta: ID!, $alpha: ID!, $mid: ID!) { account { id } }",
+        variables: ["zeta": .string("z"), "alpha": .string("a"), "mid": .string("m")]
+      )
+      let error = try #require(response.errors.first)
+      #expect(error.code == .validationError)
+      #expect(error.message.contains("$alpha"), "the first name in sorted order must be reported")
+    }
     #expect(await transport.requestCount == 0)
   }
 
   @Test("A missing required variable is rejected")
   func rejectsMissingRequiredVariable() async throws {
     let transport = RecordingTransport.succeeding(json: "{}")
-    let response = await try runtime(transport: transport)
+    let response = try await runtime(transport: transport)
       .execute(document: "query Q($id: ID!) { widget(id: $id) { id } }")
     #expect(response.errors.first?.code == .validationError)
     #expect(await transport.requestCount == 0)
@@ -319,7 +387,7 @@ struct GraphQLExecutionTests {
     let transport = RecordingTransport.succeeding(
       json: WrikeFixtures.envelope(kind: "widgets", data: "{\"id\":\"W1\",\"title\":\"One\"}")
     )
-    let response = await try runtime(transport: transport)
+    let response = try await runtime(transport: transport)
       .execute(document: "{ widget(id: \"W1\") { id } }")
 
     let widget = try #require(response.data?["widget"]?.objectValue)
@@ -333,7 +401,7 @@ struct GraphQLExecutionTests {
     let transport = RecordingTransport.succeeding(
       json: WrikeFixtures.envelope(kind: "widgets", data: "{\"id\":\"W1\"}")
     )
-    let response = await try runtime(transport: transport)
+    let response = try await runtime(transport: transport)
       .execute(document: "{ widget(id: \"W1\") { id } }")
     let rendered = response.rendered(pretty: false)
     #expect(rendered.contains("\"requestId\":\"fixed-request-id\""))
@@ -352,7 +420,7 @@ struct GraphQLExecutionTests {
       ],
       repeatsFinalOutcome: false
     )
-    let response = await try runtime(transport: transport).execute(
+    let response = try await runtime(transport: transport).execute(
       document: "{ widget(id: \"W1\") { id } widgets { nodes { id } } }"
     )
 
@@ -368,7 +436,7 @@ struct GraphQLExecutionTests {
     let transport = RecordingTransport.succeeding(
       json: WrikeFixtures.envelope(kind: "widgets", data: "{\"id\":\"W9\"}")
     )
-    let response = await try runtime(transport: transport).execute(
+    let response = try await runtime(transport: transport).execute(
       document: "query Q($id: ID!) { widget(id: $id) { id } }",
       variables: ["id": .string("W9")]
     )
