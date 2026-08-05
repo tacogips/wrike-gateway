@@ -287,10 +287,13 @@ enum WriterCases {
       definition: CollaborationMutations.createTimelog,
       arguments: ["input": .object([
         "taskId": .string("IEAAAAAAKQAB5FNY"),
-        "hours": .double(1.5)
+        "hours": .double(1.5),
+        "trackedDate": .string("2026-08-02"),
+        "comment": .string("Review")
       ])],
       document: """
-        mutation { createTimelog(input: {taskId: "IEAAAAAAKQAB5FNY", hours: 1.5}) \
+        mutation { createTimelog(input: {taskId: "IEAAAAAAKQAB5FNY", hours: 1.5, \
+        trackedDate: "2026-08-02", comment: "Review"}) \
         { timelog { id hours } } }
         """,
       expectedMethod: .post,
@@ -594,5 +597,31 @@ struct WriterBoundaryTests {
 
     #expect(response.errors.first?.code == .validationError)
     #expect(await transport.requestCount == 0)
+  }
+
+  @Test("Timelog creation requires both the tracked date and comment locally")
+  func timelogRequiresLiveContractFields() async throws {
+    let documents = [
+      """
+      mutation { createTimelog(input: {taskId: "IEAAAAAAKQAB5FNY", hours: 1.5, \
+      trackedDate: "2026-08-02"}) { timelog { id } } }
+      """,
+      """
+      mutation { createTimelog(input: {taskId: "IEAAAAAAKQAB5FNY", hours: 1.5, \
+      comment: "Review"}) { timelog { id } } }
+      """
+    ]
+
+    for document in documents {
+      let transport = RecordingTransport.succeeding(json: "{}")
+      let response = try await WriterCases.runtime(transport: transport).execute(document: document)
+
+      #expect(response.errors.first?.code == .validationError)
+      #expect(await transport.requestCount == 0)
+    }
+
+    let schema = GraphQLSchemaPrinter(registry: try WriteCapabilities.registry()).print()
+    #expect(schema.contains("trackedDate: String!"))
+    #expect(schema.contains("comment: String!"))
   }
 }

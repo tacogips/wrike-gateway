@@ -161,8 +161,8 @@ public enum CollaborationMutations {
           fields: [
             ArgumentDefinition("taskId", .identifier, .path("taskId"), required: true),
             ArgumentDefinition("hours", .number, .bodyForm("hours"), required: true),
-            ArgumentDefinition("trackedDate", .string, .bodyForm("trackedDate")),
-            ArgumentDefinition("comment", .string, .bodyForm("comment")),
+            ArgumentDefinition("trackedDate", .string, .bodyForm("trackedDate"), required: true),
+            ArgumentDefinition("comment", .string, .bodyForm("comment"), required: true),
             ArgumentDefinition("categoryId", .identifier, .bodyForm("categoryId"))
           ]
         )),

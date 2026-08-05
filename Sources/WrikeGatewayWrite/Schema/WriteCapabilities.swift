@@ -108,11 +108,17 @@ public struct WrikeWriteClient: Sendable {
     ])
   }
 
-  public func createTimelog(taskId: String, hours: Double, comment: String? = nil) async throws -> WrikeValue {
+  public func createTimelog(
+    taskId: String,
+    hours: Double,
+    trackedDate: String,
+    comment: String
+  ) async throws -> WrikeValue {
     try await execute(CollaborationMutations.createTimelog, input: [
       "taskId": .string(taskId),
       "hours": .double(hours),
-      "comment": comment.map(WrikeValue.string)
+      "trackedDate": .string(trackedDate),
+      "comment": .string(comment)
     ])
   }
 
