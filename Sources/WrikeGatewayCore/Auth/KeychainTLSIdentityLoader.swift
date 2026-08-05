@@ -112,18 +112,60 @@ public struct KeychainTLSIdentityLoader: CallbackTLSIdentityLoader {
 
   static func classify(_ error: CFError?) -> CallbackTLSIdentityFailure {
     guard let error else { return .untrusted }
-    let description = CFErrorCopyDescription(error) as String? ?? ""
-    let lowered = description.lowercased()
+    return classify(description: CFErrorCopyDescription(error) as String? ?? "")
+  }
+
+  /// Maps a `SecTrust` failure description to a stable reason.
+  ///
+  /// macOS quotes the certificate's own name in the message, as in
+  /// `“localhost” certificate is not trusted`. The quoted name is removed
+  /// before matching: this product's certificate is always named `localhost`,
+  /// which contains the substring `host`, so matching the raw description
+  /// reports a hostname problem for every trust failure and hides both the
+  /// untrusted-chain and key-usage reasons entirely. The remaining checks are
+  /// ordered most specific first.
+  static func classify(description: String) -> CallbackTLSIdentityFailure {
+    let lowered = Self.removingQuotedNames(from: description).lowercased()
     if lowered.contains("expired") || lowered.contains("not valid before")
       || lowered.contains("not yet valid") {
       return .expired
     }
+    if lowered.contains("key usage") {
+      return .wrongKeyUsage
+    }
+    if lowered.contains("not trusted") || lowered.contains("untrusted")
+      || lowered.contains("root") {
+      return .untrusted
+    }
     if lowered.contains("host") || lowered.contains("name") {
       return .hostnameIncompatible
     }
-    if lowered.contains("key usage") || lowered.contains("extended key usage") {
-      return .wrongKeyUsage
-    }
     return .untrusted
+  }
+
+  /// Strips the quoted certificate names macOS embeds in a trust failure so a
+  /// certificate's own name cannot drive the classification.
+  static func removingQuotedNames(from description: String) -> String {
+    var stripped = ""
+    var depth = 0
+    for character in description {
+      switch character {
+      case "\u{201C}", "\"":
+        depth += 1
+      case "\u{201D}":
+        depth = max(0, depth - 1)
+      default:
+        if depth == 0 {
+          stripped.append(character)
+        } else if character == " " && depth > 0 {
+          continue
+        }
+      }
+      // A straight quote closes as well as opens, so alternate on it.
+      if character == "\"" && depth == 2 {
+        depth = 0
+      }
+    }
+    return stripped
   }
 }
