@@ -1,0 +1,211 @@
+import Foundation
+
+/// Executes planned capabilities against Wrike.
+///
+/// It is the only component that joins a plan, a credential, and a transport.
+/// Because both the typed SDK and the GraphQL runtime call `execute(_:)` with a
+/// `CapabilityPlan` produced by `CapabilityPlanner`, neither can select a
+/// different capability, adapter, validation outcome, or error mapping.
+public struct CapabilityExecutor: Sendable {
+  public let planner: CapabilityPlanner
+  private let transport: any WrikeTransport
+  private let credentials: any CredentialProvider
+  private let clock: any GatewayClock
+  private let retryPolicy: RetryPolicy
+  private let requestIDFactory: @Sendable () -> String
+
+  public init(
+    planner: CapabilityPlanner,
+    transport: any WrikeTransport,
+    credentials: any CredentialProvider,
+    clock: any GatewayClock = SystemClock(),
+    retryPolicy: RetryPolicy = RetryPolicy(),
+    requestIDFactory: @escaping @Sendable () -> String = { UUID().uuidString }
+  ) {
+    self.planner = planner
+    self.transport = transport
+    self.credentials = credentials
+    self.clock = clock
+    self.retryPolicy = retryPolicy
+    self.requestIDFactory = requestIDFactory
+  }
+
+  /// Plans and executes an invocation, returning the full stable result.
+  public func execute(
+    _ invocation: CapabilityInvocation
+  ) async throws -> WrikeValue {
+    let credential = try await credentials.credential()
+    let plan = try planner.plan(invocation, grantedScopes: credential.grantedScopes)
+    return try await execute(plan, credential: credential)
+  }
+
+  /// Executes an already-planned capability.
+  public func execute(
+    _ plan: CapabilityPlan,
+    credential: ResolvedCredential? = nil
+  ) async throws -> WrikeValue {
+    let resolved: ResolvedCredential
+    if let credential {
+      resolved = credential
+    } else {
+      resolved = try await credentials.credential()
+    }
+    let requestID = requestIDFactory()
+    let response = try await send(plan: plan, credential: resolved, requestID: requestID)
+    do {
+      return try ResponseProjection.result(
+        for: plan.definition,
+        body: response.body,
+        requestedIdentifier: Self.requestedIdentifier(in: plan)
+      )
+    } catch let error as GatewayError {
+      throw error.withContext(requestID: requestID, capabilityID: plan.capabilityID)
+    }
+  }
+
+  private func send(
+    plan: CapabilityPlan,
+    credential: ResolvedCredential,
+    requestID: String
+  ) async throws -> WrikeResponse {
+    var currentCredential = credential
+    var didRefresh = false
+    var attempt = 0
+    let started = clock.now
+
+    while true {
+      attempt += 1
+      let prepared = try Self.prepare(
+        plan.request,
+        credential: currentCredential,
+        requestID: requestID
+      )
+
+      let response: WrikeResponse
+      do {
+        response = try await transport.send(prepared)
+      } catch let failure as TransportFailure {
+        let elapsed = clock.now.timeIntervalSince(started)
+        if failure.isTransient,
+           let delay = retryPolicy.delayBeforeRetry(
+             attempt: attempt,
+             method: plan.request.method,
+             retryAfterSeconds: nil,
+             elapsedSeconds: elapsed
+           ) {
+          try await clock.sleep(seconds: delay)
+          continue
+        }
+        throw Self.transportError(
+          failure,
+          plan: plan,
+          requestID: requestID
+        )
+      }
+
+      if let outcome = UpstreamErrorMapper.classify(response) {
+        // A 401 permits exactly one refresh attempt; a second 401 is returned.
+        if outcome.code == .authenticationFailed, !didRefresh,
+           let refreshed = try await credentials.refreshedCredential(after: currentCredential) {
+          didRefresh = true
+          currentCredential = refreshed
+          continue
+        }
+
+        let elapsed = clock.now.timeIntervalSince(started)
+        if RetryPolicy.isRetryable(status: response.statusCode),
+           let delay = retryPolicy.delayBeforeRetry(
+             attempt: attempt,
+             method: plan.request.method,
+             retryAfterSeconds: outcome.retryAfterSeconds,
+             elapsedSeconds: elapsed
+           ) {
+          try await clock.sleep(seconds: delay)
+          continue
+        }
+
+        throw UpstreamErrorMapper.error(
+          from: outcome,
+          status: response.statusCode,
+          capability: plan.capabilityID,
+          requestID: requestID,
+          method: plan.request.method
+        )
+      }
+
+      return response
+    }
+  }
+
+  /// Maps a transport failure. Non-idempotent methods report an unknown
+  /// outcome because the transport cannot prove Wrike did not apply the change.
+  static func transportError(
+    _ failure: TransportFailure,
+    plan: CapabilityPlan,
+    requestID: String
+  ) -> GatewayError {
+    if case .localIO(let detail) = failure {
+      return GatewayError(
+        code: .fileOperationFailed,
+        message: "A local file operation failed: \(detail).",
+        requestID: requestID,
+        capabilityID: plan.capabilityID
+      )
+    }
+    let outcomeUnknown = !plan.request.method.isAutomaticallyRetryable && failure != .cancelled
+    return GatewayError(
+      code: .transportFailed,
+      message: failure.safeSummary,
+      requestID: requestID,
+      capabilityID: plan.capabilityID,
+      outcomeUnknown: outcomeUnknown,
+      recoveryGuidance: outcomeUnknown
+        ? "The request was not automatically retried. Confirm the current state in Wrike before retrying."
+        : nil
+    )
+  }
+
+  /// Resolves the relative request against the credential's validated base URL.
+  static func prepare(
+    _ request: WrikeRequest,
+    credential: ResolvedCredential,
+    requestID: String
+  ) throws -> PreparedRequest {
+    var components = URLComponents(
+      url: credential.baseURL,
+      resolvingAgainstBaseURL: false
+    )
+    components?.path = credential.baseURL.path + request.path
+    if !request.queryItems.isEmpty {
+      components?.queryItems = request.queryItems.map { URLQueryItem(name: $0.name, value: $0.value) }
+    }
+    guard let url = components?.url else {
+      throw GatewayError.internalFailure("The capability request could not be resolved to a URL.")
+    }
+    return PreparedRequest(
+      url: url,
+      method: request.method,
+      headers: request.headers,
+      bearerToken: credential.token,
+      body: request.body,
+      timeout: request.timeout,
+      capabilityID: request.capabilityID,
+      requestID: requestID
+    )
+  }
+
+  /// The identifier a delete operation targeted, used to confirm the outcome
+  /// when Wrike echoes only an entity list.
+  static func requestedIdentifier(in plan: CapabilityPlan) -> String? {
+    guard plan.definition.operationClass == .delete else { return nil }
+    for value in plan.validatedArguments.values {
+      if case .object(let fields) = value {
+        for nested in fields.values {
+          if case .identifier(let identifier) = nested { return identifier.rawValue }
+        }
+      }
+      if case .identifier(let identifier) = value { return identifier.rawValue }
+    }
+    return nil
+  }
+}
