@@ -250,6 +250,15 @@ longer empties the granted scopes or forces a new authorization; and a callback
 request line split across TCP segments is now reassembled instead of parsed
 partially into a truncated authorization code.
 
+**Cleared on 2026-08-06.** The operator reconciled the client secret in kinko
+with the Wrike application, and `auth oauth2` then completed end to end against
+the live endpoint: the loopback HTTP listener received the redirect, the state
+validated, the authorization-code exchange succeeded at `login.wrike.com`, and
+the committed OAuth credential (mode `oauth2`, host `www.wrike.com`, refresh
+state available) served a live `/api/v4` account read. Refresh rotation remains
+unexercised live, since it needs a token near expiry; it stays proved against
+injected transports and RFC 6749.
+
 ## Auth Boundary as of the Reconciliation
 
 - Redirect URI: `http://localhost:8765/callback`, port configurable through

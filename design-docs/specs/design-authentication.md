@@ -15,10 +15,13 @@ unlocked vault by `KinkoRoundTripTests` (opt in with
 `WRIKE_GATEWAY_KINKO_ROUNDTRIP=1`), which writes a synthetic record into a
 disposable vault and asserts that a stored record decodes to what was written,
 that a rotation overwrites in place, and that a repeated delete reports the
-no-op. What remains unexercised is the live Wrike side of the flow: no
-authorization code has been exchanged with, and no refresh token rotated
-against, the real `login.wrike.com` endpoint, because that needs an operator
-browser session and a registered OAuth application.
+no-op. The live Wrike side of the authorization-code flow is now exercised: on
+2026-08-06, after the operator reconciled the client secret, `auth oauth2`
+completed end to end against the real `login.wrike.com` endpoint - loopback
+HTTP callback, state validation, code exchange, and kinko persistence - and the
+stored OAuth credential then served a live `/api/v4` request. What remains
+unexercised live is refresh rotation, which needs a token near expiry; its
+behavior is proved against injected transports and RFC 6749.
 
 ## Credential Modes
 

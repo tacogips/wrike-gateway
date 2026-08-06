@@ -247,7 +247,7 @@ documents executed against the live account with the capture chain resolving
 end to end. The mutation lifecycle remains unexecuted by this runner, and S7
 still blocks a live OAuth login.
 
-### S7: The OAuth login itself is blocked outside the code (recorded, not resolved)
+### S7: The OAuth login itself is blocked outside the code (resolved after the pass)
 
 With a valid authorization code, Wrike's token endpoint answers
 `unauthorized_client`, and a manual `curl` exchange using the same client id,
@@ -261,6 +261,14 @@ The consequence for focus area 4 is that S2's fix, and the exchange and refresh
 paths generally, remain proved against injected transports and RFC 6749 rather
 than against `login.wrike.com`. The callback listener is the one part of the
 flow now proved over real sockets, including S1's split-segment case.
+
+**Resolved after this pass closed.** The operator updated the client secret in
+kinko, and `auth oauth2` then completed end to end against the live endpoint:
+loopback HTTP callback received, state validated, authorization code exchanged
+at `login.wrike.com`, token state committed (mode `oauth2`, host
+`www.wrike.com`, refresh state available), and the stored OAuth credential
+served a live `/api/v4` account read. Refresh rotation remains live-unexercised
+until a token nears expiry.
 
 ### S8: E2E catalog drift (reviewed, no change needed)
 
