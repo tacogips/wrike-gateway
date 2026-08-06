@@ -17,7 +17,12 @@ public enum GatewayComposition {
     let environment = ProcessEnvironmentReader()
     let store = KinkoCredentialStore()
     let clock = SystemClock()
-    let exchange = try OAuthTokenExchange(transport: transport)
+    // The token endpoint is on the login host with an `/oauth2` path, which the
+    // API transport's policy refuses on both counts, so the exchange gets its
+    // own transport rather than a widened API policy.
+    let exchange = try OAuthTokenExchange(
+      transport: URLSessionWrikeTransport(hostPolicy: .oauth)
+    )
     let resolver = CredentialResolver(
       environment: environment,
       store: store,

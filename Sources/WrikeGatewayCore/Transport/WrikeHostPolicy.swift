@@ -35,6 +35,19 @@ public struct WrikeHostPolicy: Sendable, Equatable {
     requiresAPIPathPrefix: true
   )
 
+  /// The policy for the OAuth token endpoint.
+  ///
+  /// It is deliberately separate from `production`: the token endpoint lives on
+  /// the login host and its path is `/oauth2/token`, so the API policy rejects
+  /// it on both the host and the `/api/v4` prefix. Widening `production`
+  /// instead would let an ordinary API request address the login host, which is
+  /// the host that receives the client secret.
+  public static let oauth = WrikeHostPolicy(
+    allowedHosts: [approvedLoginHost],
+    requiresHTTPS: true,
+    requiresAPIPathPrefix: false
+  )
+
   public func allows(host: String?) -> Bool {
     guard let host else { return false }
     return allowedHosts.contains(host.lowercased())

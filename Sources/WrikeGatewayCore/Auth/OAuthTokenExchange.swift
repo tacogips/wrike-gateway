@@ -13,6 +13,9 @@ public struct OAuthTokenExchange: Sendable {
   public init(
     transport: any WrikeTransport,
     tokenURL: URL? = URL(string: WrikeOAuthEndpoints.tokenURL),
+    // This policy validates the data-center host Wrike returns in the token
+    // response, so it is the API policy. The request itself is gated by the
+    // injected transport's policy, which must admit the login host.
     hostPolicy: WrikeHostPolicy = .production
   ) throws {
     guard let tokenURL else {
@@ -85,15 +88,44 @@ public struct OAuthTokenExchange: Sendable {
     }
 
     guard (200..<300).contains(response.statusCode) else {
+      // The upstream OAuth `error` code is the only part of the failure body
+      // that is surfaced. It is a short server-authored enum such as
+      // `invalid_grant` or `invalid_client`, it carries no credential, and
+      // without it a rejected exchange is indistinguishable from any other and
+      // cannot be diagnosed. The description and the raw body stay unread.
+      let upstream = Self.oauthErrorCode(in: response.body)
+      let detail = upstream.map { " Wrike reported \($0)." } ?? ""
       throw GatewayError.authentication(
-        isRefresh
+        (isRefresh
           ? "Wrike rejected the refresh token."
-          : "Wrike rejected the authorization-code exchange.",
+          : "Wrike rejected the authorization-code exchange.") + detail,
         recovery: "Run `auth oauth2` to complete a new authorization."
       )
     }
 
     return try decode(response.body, client: client, now: now)
+  }
+
+  /// Reads the OAuth `error` code from a failure body.
+  ///
+  /// Only a short, well-formed token is accepted, so a server that returned
+  /// something unexpected in that field cannot push arbitrary text into an
+  /// error message.
+  static func oauthErrorCode(in body: Data) -> String? {
+    guard let value = try? WrikeValue.decodeJSON(body),
+          let fields = value.objectValue,
+          let raw = fields["error"]?.stringValue
+    else {
+      return nil
+    }
+    let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz_-")
+    let trimmed = raw.lowercased().trimmingCharacters(in: .whitespaces)
+    guard !trimmed.isEmpty, trimmed.count <= 64,
+          trimmed.unicodeScalars.allSatisfy({ allowed.contains($0) })
+    else {
+      return nil
+    }
+    return trimmed
   }
 
   /// Decodes the token response. Only the documented fields are read, and the
