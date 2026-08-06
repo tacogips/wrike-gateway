@@ -1,5 +1,15 @@
 # Live Wrike Verification, 2026-08-06
 
+> **Reconciliation note, added 2026-08-06 by the second review-and-improve
+> pass.** This document records what a live session observed at the time it ran.
+> Two commits landed after it and changed the auth boundary it describes:
+> `8a45649` moved the OAuth callback to plain HTTP on the loopback interface and
+> removed the Keychain, and `1934c87` sends the token exchange under a policy
+> that admits the login host. The recorded live outcomes below are unchanged;
+> the forward-looking claims they imply are corrected in place and are marked
+> as reconciliation notes. See "Auth Boundary as of the Reconciliation" and
+> "Verification Counts" for the current state.
+
 ## Status
 
 Completed against an account-owner-authorized real Wrike account at the
@@ -32,6 +42,16 @@ The OAuth authorize endpoint separately returned HTTP 400 with
 `https://localhost:8765/callback`. That URI is not registered for the Wrike
 application. This was recorded, not changed: the operator can register the
 default URI or set `WRIKE_GATEWAY_OAUTH_CALLBACK_PORT` to the registered port.
+
+**Reconciliation note.** The `https` redirect URI above is what the code sent on
+the day of this run. It is no longer what the code sends. Since `8a45649` the
+redirect URI is `http://localhost:8765/callback`: plain HTTP bound to the
+loopback interface, per RFC 8252 section 7.3, because a native application
+cannot hold a certificate a browser will trust for `localhost`. The
+loopback-only bind is the security property that replaces TLS, and no Keychain,
+`SecIdentity`, or `SecTrust` dependency remains. The URI that must be registered
+for the Wrike application is therefore the `http` one, not the `https` one
+recorded above.
 
 ## Reader Schema Inventory
 
@@ -206,7 +226,42 @@ divergences described above.
 | `blockedByPlan` | `createTimelog` with complete required inputs | HTTP 403, upstream `not_allowed`; no timelog ID was created. |
 | `blockedByScope` | none observed | The permanent token exposes no locally inspectable scope list; Wrike returned no scope-specific denial distinct from the plan blocks above. |
 | not exercised | webhook create/delete | Verification must not register a real callback URL. Webhook list was exercised successfully. |
-| not exercised | OAuth browser authorization | Credentials were already working, the browser was forbidden, and the redirect URI registration failure is recorded above. |
+| not exercised | OAuth browser authorization | Credentials were already working, the browser was forbidden, and the redirect URI registration failure is recorded above. See the blocker below. |
+
+### OAuth Login Blocker
+
+Recorded by the second review-and-improve pass. A live OAuth login is blocked
+outside the code and must not be retried until the blocker is cleared: with a
+valid authorization code, Wrike's token endpoint answers `unauthorized_client`,
+and a manual `curl` exchange using the same client id, client secret, and
+redirect URI reproduces it exactly. The stored client secret therefore does not
+match the registered Wrike application. This is a credential-registration
+problem, not a gateway defect, so no code change can work around it. Clearing it
+needs an operator to reconcile the Wrike application's client secret and its
+registered `http://localhost:8765/callback` redirect URI with the values kinko
+exports.
+
+Until it is cleared, the authorization-code exchange, refresh rotation, and
+single-flight refresh remain proved only through injected transports and the
+real-socket loopback listener tests. The second pass reviewed exactly that gap
+and fixed two defects a live run would have surfaced: a refresh response that
+omits `scope` or `refresh_token`, which RFC 6749 sections 5.1 and 6 permit, no
+longer empties the granted scopes or forces a new authorization; and a callback
+request line split across TCP segments is now reassembled instead of parsed
+partially into a truncated authorization code.
+
+## Auth Boundary as of the Reconciliation
+
+- Redirect URI: `http://localhost:8765/callback`, port configurable through
+  `WRIKE_GATEWAY_OAUTH_CALLBACK_PORT`.
+- Callback transport: plain HTTP, `requiredInterfaceType = .loopback`, one
+  request per login, bounded lifetime. No TLS identity exists, so
+  `AuthStatusReport` no longer carries `callbackIdentityAvailable`.
+- Token exchange: sent under a policy whose allowlist is `login.wrike.com`
+  only, kept separate from the API policy so an ordinary API request can never
+  address the host that receives the client secret.
+- Credential storage: kinko only. No Keychain, `SecIdentity`, or `SecTrust`
+  dependency remains anywhere in the package.
 
 ## Scenario Suite
 
@@ -238,13 +293,29 @@ Run the default replay suite:
 task test
 ```
 
-Run the live suite explicitly:
+Run only the read and boundary half, which creates nothing:
+
+```bash
+kinko exec --force \
+  --env WRIKE_GATEWAY_ACCESS_TOKEN,WRIKE_GATEWAY_API_BASE_URL -- \
+  task test:live:read
+```
+
+Run the full live suite, including the mutation lifecycle that creates and then
+removes a real container:
 
 ```bash
 kinko exec --force \
   --env WRIKE_GATEWAY_ACCESS_TOKEN,WRIKE_GATEWAY_API_BASE_URL -- \
   task test:live
 ```
+
+**Reconciliation note.** `task test:live:read` did not exist when this document
+was written; the only documented live command ran both tests, so a read-only
+check could not be requested without also running the mutation lifecycle. The
+second pass added the read-only task and verified that
+`swift test --filter 'LiveE2EScenarioTests/readsAndBoundaries'` selects exactly
+one test.
 
 The live runner was not executed after implementation during this session:
 the manual lifecycle had already used the authorized one-container allowance.
@@ -257,3 +328,10 @@ the suite skipped cleanly and created nothing.
 - After: 315 tests in 45 suites passed; SwiftLint clean with 0 violations
   across 101 Swift files.
 - Required final gates: `task build`, `task test`, and `swiftlint` all passed.
+
+**Reconciliation note.** The 315/45 over 101 files recorded above is stale. It
+predates `8a45649`, which removed the Keychain-backed callback identity and the
+files and suites that covered it. The baseline on `1934c87` is 313 tests in 44
+suites over 99 Swift files, and the second review-and-improve pass raised it to
+321 tests in 44 suites over 99 files. The count above is left as written because
+it is what this session measured.

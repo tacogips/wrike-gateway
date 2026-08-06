@@ -57,11 +57,22 @@ private enum E2ERunnerSupport {
     values.mapValues(WrikeValue.string)
   }
 
-  static func value(in root: WrikeValue?, at path: [String]) -> WrikeValue? {
+  static func value(
+    in root: WrikeValue?,
+    at path: [String],
+    selectFirstWhere selector: E2ECaptureSelector? = nil
+  ) -> WrikeValue? {
     var current = root
     for component in path {
       guard let value = current else { return nil }
-      if let index = Int(component) {
+      if component == "*" {
+        // A `*` component selects an array element by the capture's selector
+        // instead of by position. The live folders list is why: its first
+        // element is the Root pseudo-folder, whose id the by-id endpoint
+        // refuses, so position zero is the one element a capture must not take.
+        guard let selector, let items = value.arrayValue else { return nil }
+        current = items.first { $0[selector.field]?.stringValue == selector.equals }
+      } else if let index = Int(component) {
         guard let items = value.arrayValue, items.indices.contains(index) else { return nil }
         current = items[index]
       } else {
@@ -90,7 +101,12 @@ private enum E2ERunnerSupport {
     into captured: inout [String: String]
   ) {
     for declaration in declarations {
-      if let value = value(in: response.data, at: declaration.path)?.stringValue {
+      let resolved = value(
+        in: response.data,
+        at: declaration.path,
+        selectFirstWhere: declaration.selectFirstWhere
+      )
+      if let value = resolved?.stringValue {
         captured[declaration.key] = value
       }
     }

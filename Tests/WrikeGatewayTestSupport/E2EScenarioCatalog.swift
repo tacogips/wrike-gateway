@@ -104,8 +104,16 @@ public enum E2EScenarioCatalog {
       name: "folders list",
       tier: .reader,
       area: "folders/projects",
-      document: "{ folders { id title } }",
-      captures: [.init(key: "folderId", path: ["folders", "0", "id"])],
+      document: "{ folders { id title scope } }",
+      // The live folder tree starts with the Root and Recycle Bin
+      // pseudo-folders, whose ids the by-id endpoint refuses with HTTP 400, so
+      // the capture selects the first real folder by its scope instead of
+      // taking position zero. Proved against the live account.
+      captures: [.init(
+        key: "folderId",
+        path: ["folders", "*", "id"],
+        selectFirstWhere: .init(field: "scope", equals: "WsFolder")
+      )],
       expectation: .succeeds(field: "folders"),
       replayResponses: [WrikeFixtures.envelope(kind: "folderTree", data: WrikeFixtures.folder)]
     ),

@@ -39,9 +39,17 @@ tasks:
     cmds:
       - swift test
 
-  test:live:
-    desc: Run the opt-in live Wrike E2E scenarios
+  test:live:read:
+    desc: Run only the opt-in live Wrike read and boundary scenarios, which create nothing
     cmds:
+      - WRIKE_GATEWAY_LIVE_E2E=1 swift test --filter 'LiveE2EScenarioTests/readsAndBoundaries'
+
+  test:live:
+    desc: Run the opt-in live Wrike E2E scenarios, including the mutation lifecycle
+    cmds:
+      # This includes the mutation lifecycle, which creates a real container in
+      # the account and then removes it. Use `task test:live:read` when the run
+      # must not write anything.
       - WRIKE_GATEWAY_LIVE_E2E=1 swift test --filter LiveE2EScenarioTests
 
   clean:

@@ -39,7 +39,16 @@ responses, requires no Wrike credential, and never changes a Wrike account.
 The live E2E suite is disabled unless `WRIKE_GATEWAY_LIVE_E2E=1` and both
 permanent-token variables are present.
 
-Run the live catalog explicitly through kinko:
+Run only the read and boundary scenarios, which create, update, and delete
+nothing:
+
+```bash
+kinko exec --force \
+  --env WRIKE_GATEWAY_ACCESS_TOKEN,WRIKE_GATEWAY_API_BASE_URL -- \
+  task test:live:read
+```
+
+Run the full live catalog, including the mutation lifecycle:
 
 ```bash
 kinko exec --force \
@@ -47,7 +56,7 @@ kinko exec --force \
   task test:live
 ```
 
-The live suite is destructive by design but bounded: it creates one dedicated
+The full live suite is destructive by design but bounded: it creates one dedicated
 folder named `wrike-gateway verification` under the account root, creates a
 task, comment, optional timelog, and attachment only inside that folder,
 verifies ownership before each delete, and removes the created objects and

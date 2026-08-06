@@ -1,14 +1,38 @@
 import Foundation
 import WrikeGatewayCore
 
+/// Selects one element out of an array while resolving a capture path: the
+/// first whose `field` equals `equals`.
+///
+/// The live folders list taught the need for this: its first element is the
+/// account's Root pseudo-folder, whose id the by-id endpoint refuses with HTTP
+/// 400, so a capture that blindly takes index zero hands later scenarios an id
+/// that can never succeed. Selection is by a semantic field the schema exposes
+/// (for folders, `scope == "WsFolder"`), never by decoding the shape of an id,
+/// which the design forbids.
+public struct E2ECaptureSelector: Sendable {
+  public let field: String
+  public let equals: String
+
+  public init(field: String, equals: String) {
+    self.field = field
+    self.equals = equals
+  }
+}
+
 /// A value captured from a successful scenario for later live variables.
+///
+/// A path component of `"*"` selects an array element through
+/// `selectFirstWhere`; a numeric component indexes the array directly.
 public struct E2ECapture: Sendable {
   public let key: String
   public let path: [String]
+  public let selectFirstWhere: E2ECaptureSelector?
 
-  public init(key: String, path: [String]) {
+  public init(key: String, path: [String], selectFirstWhere: E2ECaptureSelector? = nil) {
     self.key = key
     self.path = path
+    self.selectFirstWhere = selectFirstWhere
   }
 }
 
