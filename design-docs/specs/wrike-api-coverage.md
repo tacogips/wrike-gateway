@@ -239,8 +239,8 @@ the end and are entirely unimplemented.
 | Operation | Method and path | Status |
 | --- | --- | --- |
 | Get Folders (Account) | `GET /folders` | ✅ reader `folders.list` / `projects.list` |
-| Get Folders (Folder) | `GET /folders/{folderId}/folders` | ✅ reader `folders.list` (folder scope) |
-| Get Folders (Space) | `GET /spaces/{spaceId}/folders` | ✅ reader `folders.list` (space scope) |
+| Get Folders (Folder) | `GET /folders/{folderId}/folders` | ✅ reader `folders.list` / `projects.list` (folder scope) |
+| Get Folders (Space) | `GET /spaces/{spaceId}/folders` | ✅ reader `folders.list` / `projects.list` (space scope) |
 | Get Folder By ID | `GET /folders/{folderIds}` | ✅ reader `folders.get` / `projects.get` |
 | Query Folders Fields History | `GET /folders/{folderIds}/folders_history` | ✅ reader `folders.history` |
 | Create Folder | `POST /folders/{folderId}/folders` | ✅ writer `folders.create` / `projects.create` |
