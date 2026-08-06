@@ -36,7 +36,11 @@ public enum CommentCapabilities {
       ArgumentDefinition("scope", .scope, .scope),
       ArgumentDefinition("plainText", .boolean, .query("plainText")),
       ArgumentDefinition("limit", .integer, .query("limit")),
-      ArgumentDefinition("types", .stringList, .queryList("types"))
+      ArgumentDefinition("types", .stringList, .queryList("types")),
+      // The upstream `updatedDate` parameter is deprecated (it filters by
+      // created date); the reference documents `createdDate` with a range of
+      // seven days or shorter.
+      ArgumentDefinition("createdDate", .inputObject(HistoryModels.instantRange), .queryJSON("createdDate"))
     ],
     result: .list(comment),
     scopes: .workspaceRead,

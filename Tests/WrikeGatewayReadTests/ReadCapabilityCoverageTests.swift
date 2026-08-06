@@ -155,6 +155,19 @@ enum ReaderCases {
       responseData: folder
     ),
     ReaderCase(
+      FolderCapabilities.list,
+      arguments: [
+        "updatedDate": .object(["start": .string("2026-01-01T00:00:00Z")])
+      ],
+      document: """
+        { folders(updatedDate: {start: "2026-01-01T00:00:00Z"}) { id title } }
+        """,
+      expectedPath: "/api/v4/folders",
+      expectedQuery: ["updatedDate": "{\"start\":\"2026-01-01T00:00:00Z\"}"],
+      responseKind: "folders",
+      responseData: folder
+    ),
+    ReaderCase(
       FolderCapabilities.get,
       arguments: ["id": .string("IEAAAAAAI4AB5FNY")],
       document: "{ folder(id: \"IEAAAAAAI4AB5FNY\") { id title childIds } }",
@@ -210,6 +223,22 @@ enum ReaderCases {
       responseData: task
     ),
     ReaderCase(
+      TaskCapabilities.list,
+      arguments: [
+        "scope": .object(["folderId": .string("IEAAAAAAI4AB5FNY")]),
+        "updatedDate": .object(["start": .string("2026-01-01T00:00:00Z")])
+      ],
+      document: """
+        { tasks(scope: {folderId: "IEAAAAAAI4AB5FNY"}, \
+        updatedDate: {start: "2026-01-01T00:00:00Z"}) \
+        { nodes { id title } pageInfo { resultCount nextPageToken } } }
+        """,
+      expectedPath: "/api/v4/folders/IEAAAAAAI4AB5FNY/tasks",
+      expectedQuery: ["updatedDate": "{\"start\":\"2026-01-01T00:00:00Z\"}"],
+      responseKind: "tasks",
+      responseData: task
+    ),
+    ReaderCase(
       TaskCapabilities.get,
       arguments: ["id": .string("IEAAAAAAKQAB5FNY")],
       document: "{ task(id: \"IEAAAAAAKQAB5FNY\") { id title status responsibleIds } }",
@@ -233,6 +262,23 @@ enum ReaderCases {
       arguments: ["scope": .object(["taskId": .string("IEAAAAAAKQAB5FNY")])],
       document: "{ comments(scope: {taskId: \"IEAAAAAAKQAB5FNY\"}) { id text } }",
       expectedPath: "/api/v4/tasks/IEAAAAAAKQAB5FNY/comments",
+      responseKind: "comments",
+      responseData: WrikeFixtures.comment
+    ),
+    ReaderCase(
+      CommentCapabilities.list,
+      arguments: [
+        "createdDate": .object([
+          "start": .string("2026-01-01T00:00:00Z"),
+          "end": .string("2026-01-02T00:00:00Z")
+        ])
+      ],
+      document: """
+        { comments(createdDate: {start: "2026-01-01T00:00:00Z", \
+        end: "2026-01-02T00:00:00Z"}) { id text authorId taskId createdDate } }
+        """,
+      expectedPath: "/api/v4/comments",
+      expectedQuery: ["createdDate": "{\"end\":\"2026-01-02T00:00:00Z\",\"start\":\"2026-01-01T00:00:00Z\"}"],
       responseKind: "comments",
       responseData: WrikeFixtures.comment
     ),
@@ -280,6 +326,20 @@ enum ReaderCases {
         { nodes { id hours } pageInfo { resultCount } } }
         """,
       expectedPath: "/api/v4/tasks/IEAAAAAAKQAB5FNY/timelogs",
+      responseKind: "timelogs",
+      responseData: WrikeFixtures.timelog
+    ),
+    ReaderCase(
+      TimelogCapabilities.list,
+      arguments: [
+        "updatedDate": .object(["start": .string("2026-01-01T00:00:00Z")])
+      ],
+      document: """
+        { timelogs(updatedDate: {start: "2026-01-01T00:00:00Z"}) \
+        { nodes { id hours } pageInfo { resultCount } } }
+        """,
+      expectedPath: "/api/v4/timelogs",
+      expectedQuery: ["updatedDate": "{\"start\":\"2026-01-01T00:00:00Z\"}"],
       responseKind: "timelogs",
       responseData: WrikeFixtures.timelog
     ),

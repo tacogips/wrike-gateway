@@ -86,10 +86,15 @@ public struct WrikeReadClient: Sendable {
     try await execute(SpaceCapabilities.get, ["id": .string(id)])
   }
 
-  public func folders(scope: WrikeScope? = nil, descendants: Bool? = nil) async throws -> WrikeValue {
+  public func folders(
+    scope: WrikeScope? = nil,
+    descendants: Bool? = nil,
+    updatedDate: WrikeInstantRange? = nil
+  ) async throws -> WrikeValue {
     try await execute(FolderCapabilities.list, [
       "scope": scope?.value,
-      "descendants": descendants.map(WrikeValue.bool)
+      "descendants": descendants.map(WrikeValue.bool),
+      "updatedDate": updatedDate?.value
     ])
   }
 
@@ -116,12 +121,14 @@ public struct WrikeReadClient: Sendable {
   public func tasks(
     scope: WrikeScope? = nil,
     page: PageInput? = nil,
-    status: String? = nil
+    status: String? = nil,
+    updatedDate: WrikeInstantRange? = nil
   ) async throws -> WrikeValue {
     try await execute(TaskCapabilities.list, [
       "scope": scope?.value,
       "page": page.map(Self.pageValue),
-      "status": status.map(WrikeValue.string)
+      "status": status.map(WrikeValue.string),
+      "updatedDate": updatedDate?.value
     ])
   }
 
@@ -139,10 +146,15 @@ public struct WrikeReadClient: Sendable {
 
   // MARK: - Collaboration and administration views
 
-  public func comments(scope: WrikeScope? = nil, plainText: Bool? = nil) async throws -> WrikeValue {
+  public func comments(
+    scope: WrikeScope? = nil,
+    plainText: Bool? = nil,
+    createdDate: WrikeInstantRange? = nil
+  ) async throws -> WrikeValue {
     try await execute(CommentCapabilities.list, [
       "scope": scope?.value,
-      "plainText": plainText.map(WrikeValue.bool)
+      "plainText": plainText.map(WrikeValue.bool),
+      "createdDate": createdDate?.value
     ])
   }
 
@@ -165,10 +177,15 @@ public struct WrikeReadClient: Sendable {
     try await execute(AttachmentCapabilities.url, ["id": .string(id)])
   }
 
-  public func timelogs(scope: WrikeScope? = nil, page: PageInput? = nil) async throws -> WrikeValue {
+  public func timelogs(
+    scope: WrikeScope? = nil,
+    page: PageInput? = nil,
+    updatedDate: WrikeInstantRange? = nil
+  ) async throws -> WrikeValue {
     try await execute(TimelogCapabilities.list, [
       "scope": scope?.value,
-      "page": page.map(Self.pageValue)
+      "page": page.map(Self.pageValue),
+      "updatedDate": updatedDate?.value
     ])
   }
 

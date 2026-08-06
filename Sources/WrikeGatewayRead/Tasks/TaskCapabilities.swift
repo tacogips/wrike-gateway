@@ -82,7 +82,8 @@ public enum TaskCapabilities {
       ArgumentDefinition("title", .string, .query("title")),
       ArgumentDefinition("responsibles", .identifierList, .queryList("responsibles")),
       ArgumentDefinition("subTasks", .boolean, .query("subTasks")),
-      ArgumentDefinition("descendants", .boolean, .query("descendants"))
+      ArgumentDefinition("descendants", .boolean, .query("descendants")),
+      ArgumentDefinition("updatedDate", .inputObject(HistoryModels.instantRange), .queryJSON("updatedDate"))
     ],
     result: .connection(task),
     scopes: .workspaceRead,

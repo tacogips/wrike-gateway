@@ -126,6 +126,18 @@ The five rows that were previously blocked were closed as follows.
 | `contacts.history`, `folders.history`, `tasks.history` | The routes were located in the official reference index and confirmed individually: `GET /contacts/{contactIds}/contacts_history`, `GET /folders/{folderIds}/folders_history`, and `GET /tasks/{taskIds}/tasks_history`, each with an `updatedDate` instant range, a resource-specific `fields` selection, a 1000-entry limit on the comma-separated id segment, and the `contactsHistory`/`foldersHistory`/`tasksHistory` envelope kinds. No route was substituted or inferred. |
 | `attachments.download`, `attachments.preview` | The file-output contract the earlier entry required now exists in core: a `destinationPath` argument binding, a `fileOutput` result, and one shared `ResponseSinkDelivery` that both the live and the test transports use. Destination-path validation and file-operation error mapping are specified in `design-wrike-api-client.md#binary-response-bodies`. `GET /attachments/{attachmentId}/download` and `GET /attachments/{attachmentId}/preview` were confirmed individually, including the six curated `size` values. `attachments.url` remains the metadata-and-link case and is unchanged. |
 
+### Date-Range List Filters
+
+Four list capabilities accept an `InstantRangeInput` date filter, each
+confirmed individually against the official reference:
+
+| Capability id | Filter | Upstream parameter |
+| --- | --- | --- |
+| `tasks.list` | `updatedDate` | `GET /tasks` documents `updatedDate` as an instant range. |
+| `folders.list` | `updatedDate` | `GET /folders` documents `updatedDate` as an instant range. |
+| `timelogs.list` | `updatedDate` | `GET /timelogs` documents `updatedDate` as an instant range alongside `createdDate` and `trackedDate`. |
+| `comments.list` | `createdDate` | `GET /comments` documents `createdDate` with a range of seven days or shorter; the upstream `updatedDate` parameter is deprecated because it filters by created date, so it is not exposed. Live verification shows Wrike accepts the parameter only on the account variant; scoped comment routes reject it, and the account variant itself may be plan-blocked (`AUTHORIZATION_FAILED`). |
+
 ### Pagination
 
 Only capabilities with a documented upstream page limit are modelled as

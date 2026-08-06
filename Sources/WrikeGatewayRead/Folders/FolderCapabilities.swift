@@ -66,7 +66,8 @@ public enum FolderCapabilities {
     ArgumentDefinition("permalink", .string, .query("permalink")),
     ArgumentDefinition("descendants", .boolean, .query("descendants")),
     ArgumentDefinition("deleted", .boolean, .query("deleted")),
-    ArgumentDefinition("metadata", .string, .query("metadata"))
+    ArgumentDefinition("metadata", .string, .query("metadata")),
+    ArgumentDefinition("updatedDate", .inputObject(HistoryModels.instantRange), .queryJSON("updatedDate"))
   ]
 
   public static let list = CapabilityDefinition(

@@ -47,7 +47,8 @@ public enum TimelogCapabilities {
       ArgumentDefinition("descendants", .boolean, .query("descendants")),
       ArgumentDefinition("plainText", .boolean, .query("plainText")),
       ArgumentDefinition("trackedDate", .string, .query("trackedDate")),
-      ArgumentDefinition("billingTypes", .stringList, .queryList("billingTypes"))
+      ArgumentDefinition("billingTypes", .stringList, .queryList("billingTypes")),
+      ArgumentDefinition("updatedDate", .inputObject(HistoryModels.instantRange), .queryJSON("updatedDate"))
     ],
     result: .connection(timelog),
     scopes: .workspaceRead,
