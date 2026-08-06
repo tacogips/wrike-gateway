@@ -382,6 +382,23 @@ enum WriterCases {
       responseData: WrikeFixtures.webhook
     ),
     WriterCase(
+      definition: CollaborationMutations.createWebhook,
+      arguments: ["input": .object([
+        "hookUrl": .string("https://example.test/hook"),
+        "events": .array([.string("TaskCreated"), .string("CommentAdded")]),
+        "secret": .string("hook-signing-secret")
+      ])],
+      document: """
+        mutation { createWebhook(input: {hookUrl: "https://example.test/hook", \
+        events: ["TaskCreated", "CommentAdded"], secret: "hook-signing-secret"}) \
+        { webhook { id status } } }
+        """,
+      expectedMethod: .post,
+      expectedPath: "/api/v4/webhooks",
+      responseKind: "webhooks",
+      responseData: WrikeFixtures.webhook
+    ),
+    WriterCase(
       definition: CollaborationMutations.updateWebhookStatus,
       arguments: ["input": .object([
         "webhookId": .string("IEAAAAAAJEAAAAAB"),

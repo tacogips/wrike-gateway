@@ -340,15 +340,19 @@ public enum CollaborationMutations {
           fields: [
             ArgumentDefinition("hookUrl", .string, .bodyForm("hookUrl"), required: true),
             ArgumentDefinition("events", .stringList, .bodyForm("events")),
-            ArgumentDefinition("recursive", .boolean, .bodyForm("recursive"))
+            ArgumentDefinition("recursive", .boolean, .bodyForm("recursive")),
+            ArgumentDefinition("secret", .string, .bodyForm("secret"))
           ]
         )),
         .container,
         required: true
       )
     ],
-    // The webhook signing secret is not an input here and is not part of the
-    // stable model, so it can never appear in this project's output.
+    // The webhook signing secret is write-only: it is accepted as an input for
+    // secure-webhook registration (pass it via --variables-file, never inline
+    // in a document), it is forwarded only in the upstream request body, and
+    // the stable Webhook model has no secret field, so it can never appear in
+    // this project's output.
     result: .payload(field: "webhook", WebhookCapabilities.webhook),
     scopes: .workspaceReadWrite,
     summary: "Registers a webhook for the account, a folder, a project, or a space."
