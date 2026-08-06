@@ -49,6 +49,14 @@ Important defaults:
 - Run `swiftlint` after Swift edits when available.
 - Run the narrowest relevant `swift test` or `swift build` command, then broaden when shared behavior changed.
 
+## Using the CLI Against a Wrike Account
+
+When the task is to read or change Wrike data with the built or installed
+`wrike-gateway-reader`, `wrike-gateway-writer`, or `wrike-gateway-admin`
+binaries, use `.agents/skills/wrike-via-gateway/SKILL.md`. It covers tier
+selection, kinko credential injection, schema inspection, GraphQL query and
+mutation patterns, pagination, and stable error handling.
+
 ## Release Workflows
 
 Use `.agents/skills/homebrew-release/SKILL.md` for Homebrew formula archives and tap formula rendering.
