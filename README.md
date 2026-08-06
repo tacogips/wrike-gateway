@@ -6,6 +6,30 @@ The public contract is a project-owned GraphQL-shaped schema. Wrike REST paths,
 query parameters, and response envelopes are transport details that never reach
 a caller. There is no raw REST, arbitrary URL, or arbitrary GraphQL passthrough.
 
+## Install
+
+Homebrew (macOS, Apple Silicon and Intel):
+
+```bash
+brew tap tacogips/tap
+brew install wrike-gateway
+```
+
+One formula installs all three executables: `wrike-gateway-reader`,
+`wrike-gateway-writer`, and `wrike-gateway-admin`. Verify with:
+
+```bash
+wrike-gateway-reader --version
+```
+
+From source instead:
+
+```bash
+git clone https://github.com/tacogips/wrike-gateway.git
+cd wrike-gateway
+swift build -c release
+```
+
 ## Capability Tiers
 
 Capabilities are separated at SwiftPM link boundaries, not only at runtime.
