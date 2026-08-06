@@ -347,7 +347,7 @@ struct CrossTierSchemaTests {
       #expect(result.exitCode == 0, "\(name)")
       let lines = result.standardOutput.split(separator: "\n")
       #expect(lines.count == 1, "\(name)")
-      #expect(lines.first == "0.1.0", "\(name)")
+      #expect(lines.first.map(String.init) == GatewayVersion.current, "\(name)")
     }
   }
 }
