@@ -63,9 +63,18 @@ extension WrikeValue {
   }
 
   private static func convert(number: NSNumber) -> WrikeValue {
+    #if canImport(Darwin)
     if CFGetTypeID(number) == CFBooleanGetTypeID() {
       return .bool(number.boolValue)
     }
+    #else
+    // swift-corelibs-foundation has no exposed CFBoolean; its JSONSerialization
+    // decodes true/false to char-typed NSNumbers, and no other JSON value
+    // decodes to that objCType.
+    if String(cString: number.objCType) == "c" {
+      return .bool(number.boolValue)
+    }
+    #endif
     let type = String(cString: number.objCType)
     if type == "f" || type == "d" {
       return .double(number.doubleValue)

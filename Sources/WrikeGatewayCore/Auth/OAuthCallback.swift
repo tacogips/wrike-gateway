@@ -108,9 +108,16 @@ public struct SystemBrowserOpener: BrowserOpener {
   }
 
   public func open(_ authorizationURL: SecretValue) async throws {
+    #if os(macOS)
+    let executable = "/usr/bin/open"
+    let arguments = ["--background", authorizationURL.reveal()]
+    #else
+    let executable = "/usr/bin/xdg-open"
+    let arguments = [authorizationURL.reveal()]
+    #endif
     let result = try await runner.run(
-      executable: "/usr/bin/open",
-      arguments: ["--background", authorizationURL.reveal()],
+      executable: executable,
+      arguments: arguments,
       standardInput: nil
     )
     guard result.exitCode == 0 else {

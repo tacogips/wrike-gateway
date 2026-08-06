@@ -1,5 +1,10 @@
 import Foundation
+
+#if canImport(Network)
 import Network
+#else
+import Glibc
+#endif
 
 /// The production OAuth callback listener.
 ///
@@ -10,12 +15,15 @@ import Network
 /// The transport is http rather than https by design, per RFC 8252 section 7.3:
 /// a native application cannot hold a certificate a browser will trust for
 /// `localhost`, so the loopback interface redirect is specified to use http.
-/// `requiredInterfaceType = .loopback` is the security property that replaces
-/// TLS here: the socket is reachable only over the loopback interface, so the
-/// authorization code never traverses a network the operator does not control.
+/// On Apple platforms `requiredInterfaceType = .loopback` is the security
+/// property that replaces TLS here; on Linux the socket is bound explicitly to
+/// 127.0.0.1. Either way the socket is reachable only over the loopback
+/// interface, so the authorization code never traverses a network the operator
+/// does not control.
 public struct LoopbackCallbackListener: OAuthCallbackListener {
   public init() {}
 
+  #if canImport(Network)
   public func awaitCallback(
     port callbackPort: Int,
     timeoutSeconds: Double
@@ -116,6 +124,7 @@ public struct LoopbackCallbackListener: OAuthCallbackListener {
       listener.cancel()
     }
   }
+  #endif
 
   /// The most the listener buffers while waiting for the request line to
   /// finish arriving. A browser's callback request line is far smaller, so a
@@ -130,6 +139,7 @@ public struct LoopbackCallbackListener: OAuthCallbackListener {
     case invalid
   }
 
+  #if canImport(Network)
   /// Reads until the request line is complete, then delivers or refuses it.
   ///
   /// The request must not be parsed from whatever the first read happens to
@@ -184,20 +194,158 @@ public struct LoopbackCallbackListener: OAuthCallbackListener {
   }
 
   /// Answers the browser and closes the connection.
-  ///
-  /// A minimal response body keeps the browser tab from showing an error; it
-  /// contains no OAuth data. The length is measured rather than written by
-  /// hand, so the browser cannot receive a truncated body from a header that
-  /// disagrees with it.
   private static func respond(on connection: NWConnection) {
-    let payload = "Authorization complete."
-    let body = "HTTP/1.1 200 OK\r\nContent-Length: \(payload.utf8.count)\r\n"
-      + "Content-Type: text/plain; charset=utf-8\r\nConnection: close\r\n\r\n"
-      + payload
     connection.send(
-      content: Data(body.utf8),
+      content: Data(successResponse.utf8),
       completion: .contentProcessed { _ in connection.cancel() }
     )
+  }
+  #else
+
+  public func awaitCallback(
+    port callbackPort: Int,
+    timeoutSeconds: Double
+  ) async throws -> OAuthCallbackRequest {
+    guard (1...65535).contains(callbackPort) else {
+      throw GatewayError.internalFailure("The configured callback port is not valid.")
+    }
+    let listenerDescriptor = try Self.bindLoopbackListener(port: callbackPort)
+    defer { close(listenerDescriptor) }
+
+    // The timeout is enforced inside the poll loop rather than by a racing
+    // task, because a blocking `accept` cannot be interrupted by cancelling a
+    // sibling task the way an `NWListener` can be cancelled.
+    var remainingMilliseconds = Int(max(1, timeoutSeconds) * 1000)
+    remainingMilliseconds = try await Self.waitReadable(
+      listenerDescriptor,
+      remainingMilliseconds: remainingMilliseconds
+    )
+
+    let connectionDescriptor = accept(listenerDescriptor, nil, nil)
+    guard connectionDescriptor >= 0 else {
+      throw GatewayError.authentication("The OAuth callback connection failed.")
+    }
+    defer { close(connectionDescriptor) }
+
+    var buffer = Data()
+    while true {
+      remainingMilliseconds = try await Self.waitReadable(
+        connectionDescriptor,
+        remainingMilliseconds: remainingMilliseconds
+      )
+      var chunk = [UInt8](repeating: 0, count: 1024)
+      let readCount = read(connectionDescriptor, &chunk, chunk.count)
+      if readCount < 0 {
+        if errno == EINTR { continue }
+        throw GatewayError.authentication("The OAuth callback connection failed.")
+      }
+      buffer.append(contentsOf: chunk[0..<readCount])
+
+      switch Self.requestLineOutcome(buffer, port: callbackPort) {
+      case .complete(let request):
+        Self.respond(on: connectionDescriptor)
+        return request
+      case .invalid:
+        Self.respond(on: connectionDescriptor)
+        throw GatewayError.authentication("The OAuth callback request was unreadable.")
+      case .incomplete:
+        guard readCount > 0, buffer.count < Self.maximumRequestLineBytes else {
+          Self.respond(on: connectionDescriptor)
+          throw GatewayError.authentication("The OAuth callback request was unreadable.")
+        }
+      }
+    }
+  }
+
+  /// Binds a TCP listener explicitly to 127.0.0.1, which is what confines the
+  /// callback to the loopback interface on a platform without `NWParameters`.
+  private static func bindLoopbackListener(port callbackPort: Int) throws -> Int32 {
+    let descriptor = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
+    guard descriptor >= 0 else {
+      throw GatewayError.authentication("The OAuth callback listener stopped unexpectedly.")
+    }
+    var reuseAddress: Int32 = 1
+    _ = setsockopt(
+      descriptor,
+      SOL_SOCKET,
+      SO_REUSEADDR,
+      &reuseAddress,
+      socklen_t(MemoryLayout<Int32>.size)
+    )
+    var address = sockaddr_in()
+    address.sin_family = sa_family_t(AF_INET)
+    address.sin_port = in_port_t(UInt16(callbackPort).bigEndian)
+    // 127.0.0.1; the Glibc overlay does not reliably expose INADDR_LOOPBACK.
+    address.sin_addr = in_addr(s_addr: UInt32(0x7F00_0001).bigEndian)
+    let bound = withUnsafePointer(to: &address) { pointer in
+      pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { socketAddress in
+        bind(descriptor, socketAddress, socklen_t(MemoryLayout<sockaddr_in>.size))
+      }
+    }
+    guard bound == 0, listen(descriptor, 1) == 0 else {
+      close(descriptor)
+      throw GatewayError.authentication(
+        "The OAuth callback listener could not bind the configured loopback port.",
+        recovery: "Ensure no other process is using port \(callbackPort), or set "
+          + "\(GatewayEnvironmentKey.oauthCallbackPort.rawValue) to a free port that "
+          + "matches a redirect URI registered for the Wrike application."
+      )
+    }
+    return descriptor
+  }
+
+  /// Polls in short slices so the timeout and task cancellation are both
+  /// honoured while a blocking descriptor waits for data. Returns the timeout
+  /// budget that remains, or throws once the budget is spent.
+  private static func waitReadable(
+    _ descriptor: Int32,
+    remainingMilliseconds: Int
+  ) async throws -> Int {
+    var remaining = remainingMilliseconds
+    while remaining > 0 {
+      try Task.checkCancellation()
+      let slice = Int32(min(200, remaining))
+      var descriptors = pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0)
+      let result = poll(&descriptors, 1, slice)
+      if result > 0 { return remaining }
+      if result < 0, errno != EINTR {
+        throw GatewayError.authentication("The OAuth callback listener stopped unexpectedly.")
+      }
+      remaining -= Int(slice)
+      await Task.yield()
+    }
+    throw GatewayError.authentication(
+      "The OAuth callback did not arrive before the timeout elapsed.",
+      recovery: "Run `auth oauth2` again and complete authorization in the browser."
+    )
+  }
+
+  /// Answers the browser and leaves closing to the caller's `defer`.
+  private static func respond(on descriptor: Int32) {
+    let bytes = Array(successResponse.utf8)
+    var sent = 0
+    while sent < bytes.count {
+      let written = bytes.withUnsafeBytes { pointer in
+        write(descriptor, pointer.baseAddress?.advanced(by: sent), bytes.count - sent)
+      }
+      if written <= 0 {
+        if errno == EINTR { continue }
+        break
+      }
+      sent += written
+    }
+  }
+  #endif
+
+  /// The reply every accepted connection receives. A minimal response body
+  /// keeps the browser tab from showing an error; it contains no OAuth data.
+  /// The length is measured rather than written by hand, so the browser cannot
+  /// receive a truncated body from a header that disagrees with it.
+  static var successResponse: String {
+    let payload = "Authorization complete."
+    return "HTTP/1.1 200 OK\r\nContent-Length: \(payload.utf8.count)\r\n"
+      + "Content-Type: text/plain; charset=utf-8\r\nConnection: close\r\n\r\n"
+      + payload
   }
 
   /// Extracts only the path and query from a terminated request line. Headers

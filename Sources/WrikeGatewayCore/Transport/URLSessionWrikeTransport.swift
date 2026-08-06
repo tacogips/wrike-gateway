@@ -1,5 +1,9 @@
 import Foundation
 
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
+
 /// The live `URLSession`-backed transport.
 ///
 /// Redirects are inspected rather than followed blindly: a redirect to any host
