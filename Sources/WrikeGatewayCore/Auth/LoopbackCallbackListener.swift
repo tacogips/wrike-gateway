@@ -103,33 +103,12 @@ public struct LoopbackCallbackListener: OAuthCallbackListener {
 
         listener.newConnectionHandler = { connection in
           connection.start(queue: .global())
-          connection.receive(minimumIncompleteLength: 1, maximumLength: 8192) { data, _, _, error in
-            defer {
-              // A minimal response body keeps the browser tab from showing an
-              // error; it contains no OAuth data. The length is measured rather
-              // than written by hand, so the browser cannot receive a truncated
-              // body from a header that disagrees with it.
-              let payload = "Authorization complete."
-              let body = "HTTP/1.1 200 OK\r\nContent-Length: \(payload.utf8.count)\r\n"
-                + "Content-Type: text/plain; charset=utf-8\r\nConnection: close\r\n\r\n"
-                + payload
-              connection.send(
-                content: Data(body.utf8),
-                completion: .contentProcessed { _ in connection.cancel() }
-              )
-            }
-            if error != nil {
-              finish(.failure(GatewayError.authentication("The OAuth callback connection failed.")))
-              return
-            }
-            guard let data, let request = parseRequestLine(data, port: callbackPort) else {
-              finish(.failure(
-                GatewayError.authentication("The OAuth callback request was unreadable.")
-              ))
-              return
-            }
-            finish(.success(request))
-          }
+          receiveRequestLine(
+            on: connection,
+            accumulated: Data(),
+            port: callbackPort,
+            finish: finish
+          )
         }
         listener.start(queue: .global())
       }
@@ -138,29 +117,130 @@ public struct LoopbackCallbackListener: OAuthCallbackListener {
     }
   }
 
-  /// Extracts only the path and query from the request line. Headers and body
-  /// are discarded without inspection.
-  static func parseRequestLine(
+  /// The most the listener buffers while waiting for the request line to
+  /// finish arriving. A browser's callback request line is far smaller, so a
+  /// peer that never sends a terminator is refused rather than read forever.
+  static let maximumRequestLineBytes = 8192
+
+  /// What a received buffer says about the request line so far.
+  enum RequestLineOutcome: Equatable {
+    case complete(OAuthCallbackRequest)
+    /// No line terminator has arrived yet, so the buffer must not be parsed.
+    case incomplete
+    case invalid
+  }
+
+  /// Reads until the request line is complete, then delivers or refuses it.
+  ///
+  /// The request must not be parsed from whatever the first read happens to
+  /// return. A browser may split the callback GET across TCP segments, and the
+  /// authorization code and OAuth state make that line long enough for it to
+  /// happen; parsing a partial line would silently truncate the code and send
+  /// the truncated value to Wrike's token endpoint, which reports only
+  /// `invalid_grant`.
+  private static func receiveRequestLine(
+    on connection: NWConnection,
+    accumulated: Data,
+    port callbackPort: Int,
+    finish: @escaping @Sendable (Result<OAuthCallbackRequest, any Error>) -> Void
+  ) {
+    connection.receive(
+      minimumIncompleteLength: 1,
+      maximumLength: maximumRequestLineBytes
+    ) { data, _, isComplete, error in
+      if error != nil {
+        respond(on: connection)
+        finish(.failure(GatewayError.authentication("The OAuth callback connection failed.")))
+        return
+      }
+      var buffer = accumulated
+      if let data { buffer.append(data) }
+
+      switch requestLineOutcome(buffer, port: callbackPort) {
+      case .complete(let request):
+        respond(on: connection)
+        finish(.success(request))
+      case .invalid:
+        respond(on: connection)
+        finish(.failure(
+          GatewayError.authentication("The OAuth callback request was unreadable.")
+        ))
+      case .incomplete:
+        guard !isComplete, buffer.count < maximumRequestLineBytes else {
+          respond(on: connection)
+          finish(.failure(
+            GatewayError.authentication("The OAuth callback request was unreadable.")
+          ))
+          return
+        }
+        receiveRequestLine(
+          on: connection,
+          accumulated: buffer,
+          port: callbackPort,
+          finish: finish
+        )
+      }
+    }
+  }
+
+  /// Answers the browser and closes the connection.
+  ///
+  /// A minimal response body keeps the browser tab from showing an error; it
+  /// contains no OAuth data. The length is measured rather than written by
+  /// hand, so the browser cannot receive a truncated body from a header that
+  /// disagrees with it.
+  private static func respond(on connection: NWConnection) {
+    let payload = "Authorization complete."
+    let body = "HTTP/1.1 200 OK\r\nContent-Length: \(payload.utf8.count)\r\n"
+      + "Content-Type: text/plain; charset=utf-8\r\nConnection: close\r\n\r\n"
+      + payload
+    connection.send(
+      content: Data(body.utf8),
+      completion: .contentProcessed { _ in connection.cancel() }
+    )
+  }
+
+  /// Extracts only the path and query from a terminated request line. Headers
+  /// and body are discarded without inspection.
+  static func requestLineOutcome(
     _ data: Data,
     port callbackPort: Int = WrikeOAuthEndpoints.defaultCallbackPort
-  ) -> OAuthCallbackRequest? {
-    guard let text = String(data: data, encoding: .utf8) else { return nil }
-    guard let line = text.split(separator: "\r\n", maxSplits: 1).first else { return nil }
+  ) -> RequestLineOutcome {
+    // The terminator is located in the bytes rather than in a decoded string,
+    // so a buffer that ends mid-sequence is reported as incomplete instead of
+    // as a decoding failure.
+    guard let terminator = data.firstIndex(of: 0x0A) else { return .incomplete }
+    var lineBytes = data[data.startIndex..<terminator]
+    if lineBytes.last == 0x0D { lineBytes = lineBytes.dropLast() }
+
+    guard let line = String(data: Data(lineBytes), encoding: .utf8) else { return .invalid }
     let parts = line.split(separator: " ")
-    guard parts.count >= 2, parts[0] == "GET" else { return nil }
+    guard parts.count >= 2, parts[0] == "GET" else { return .invalid }
     let target = String(parts[1])
     guard let components = URLComponents(string: "http://\(WrikeOAuthEndpoints.callbackHost)\(target)") else {
-      return nil
+      return .invalid
     }
     let items = (components.queryItems ?? []).map {
       WrikeQueryItem(name: $0.name, value: $0.value ?? "")
     }
-    return OAuthCallbackRequest(
+    return .complete(OAuthCallbackRequest(
       host: WrikeOAuthEndpoints.callbackHost,
       port: callbackPort,
       path: components.path,
       queryItems: items
-    )
+    ))
+  }
+
+  /// The delivered request, or `nil` when the buffer is not a complete and
+  /// valid callback request line.
+  static func parseRequestLine(
+    _ data: Data,
+    port callbackPort: Int = WrikeOAuthEndpoints.defaultCallbackPort
+  ) -> OAuthCallbackRequest? {
+    guard case .complete(let request) = requestLineOutcome(data, port: callbackPort) else {
+      return nil
+    }
+    return request
   }
 }
 

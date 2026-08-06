@@ -118,6 +118,13 @@ public struct CapabilityExecutor: Sendable {
            let refreshed = try await credentials.refreshedCredential(after: currentCredential) {
           didRefresh = true
           currentCredential = refreshed
+          // The re-send carries a new credential for a request that was refused
+          // for the old one, so it is not one of the attempts the retry policy
+          // budgets for transient upstream conditions. Without this, a request
+          // that refreshes and then meets a 429 gets fewer retries than the
+          // policy specifies, and `didRefresh` already bounds this branch to
+          // one pass.
+          attempt -= 1
           continue
         }
 

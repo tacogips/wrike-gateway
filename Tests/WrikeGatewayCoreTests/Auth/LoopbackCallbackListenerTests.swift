@@ -186,6 +186,114 @@ private enum LoopbackProbe {
     return url
   }
 
+  /// Sends a raw request in ordered chunks over one loopback connection and
+  /// returns the bytes the listener answered with.
+  ///
+  /// `URLSession` writes a small GET in a single segment, so a split request
+  /// line cannot be produced through it. Driving the socket directly is the
+  /// only way to observe what the listener does when the request line arrives
+  /// in pieces, which is what a real browser is free to do.
+  static func sendChunked(
+    _ chunks: [String],
+    toPort port: Int,
+    pauseSeconds: Double = 0.15,
+    closeAfterSending: Bool = false,
+    attempts: Int = 60
+  ) async throws -> Data {
+    guard let endpointPort = NWEndpoint.Port(rawValue: UInt16(port)) else {
+      throw ProbeError.socketUnavailable
+    }
+    for _ in 0..<attempts {
+      let connection = NWConnection(host: "127.0.0.1", port: endpointPort, using: .tcp)
+      if await ready(connection) {
+        for (index, chunk) in chunks.enumerated() {
+          if index > 0 {
+            try await Task.sleep(nanoseconds: UInt64(pauseSeconds * 1_000_000_000))
+          }
+          try await send(Data(chunk.utf8), on: connection)
+        }
+        if closeAfterSending {
+          // Half-close, so the listener observes end of input rather than
+          // waiting for bytes that will never arrive.
+          try await send(nil, on: connection)
+        }
+        let answer = await receiveAll(on: connection)
+        connection.cancel()
+        return answer
+      }
+      connection.cancel()
+      try await Task.sleep(nanoseconds: 50_000_000)
+    }
+    throw ProbeError.notConnected
+  }
+
+  private static func ready(_ connection: NWConnection) async -> Bool {
+    let claim = ResumeOnce()
+    let result = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+      let finish: @Sendable (Bool) -> Void = { value in
+        guard claim.claim() else { return }
+        continuation.resume(returning: value)
+      }
+      connection.stateUpdateHandler = { state in
+        switch state {
+        case .ready: finish(true)
+        case .failed, .cancelled, .waiting: finish(false)
+        default: break
+        }
+      }
+      DispatchQueue.global().asyncAfter(deadline: .now() + 5) { finish(false) }
+      connection.start(queue: .global())
+    }
+    return result
+  }
+
+  /// Sends one chunk, or half-closes the write side when `data` is `nil`.
+  private static func send(_ data: Data?, on connection: NWConnection) async throws {
+    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+      connection.send(
+        content: data,
+        contentContext: data == nil ? .finalMessage : .defaultMessage,
+        isComplete: data == nil,
+        completion: .contentProcessed { error in
+          if let error {
+            continuation.resume(throwing: error)
+          } else {
+            continuation.resume()
+          }
+        }
+      )
+    }
+  }
+
+  /// Reads until the listener closes the connection, so the assertion sees the
+  /// whole answer rather than its first segment.
+  private static func receiveAll(on connection: NWConnection) async -> Data {
+    let claim = ResumeOnce()
+    return await withCheckedContinuation { (continuation: CheckedContinuation<Data, Never>) in
+      let finish: @Sendable (Data) -> Void = { value in
+        guard claim.claim() else { return }
+        continuation.resume(returning: value)
+      }
+      let collected = LockedBox(Data())
+      func step() {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 8192) { data, _, isComplete, error in
+          if let data, !data.isEmpty {
+            var current = collected.get()
+            current.append(data)
+            collected.set(current)
+          }
+          if isComplete || error != nil {
+            finish(collected.get())
+            return
+          }
+          step()
+        }
+      }
+      DispatchQueue.global().asyncAfter(deadline: .now() + 10) { finish(collected.get()) }
+      step()
+    }
+  }
+
   /// Single-resume claim for bridging a Network.framework callback and a timer
   /// into one continuation.
   final class ResumeOnce: @unchecked Sendable {
@@ -344,5 +452,82 @@ struct LoopbackCallbackListenerTests {
     #expect(request.port == 8765)
     #expect(request.queryValue("code") == "abc")
     #expect(request.queryValue("state") == "def")
+  }
+
+  @Test("An unterminated request line is never parsed as a complete callback")
+  func refusesPartialRequestLine() {
+    // The prefix of a real callback request, cut inside the code value. Parsing
+    // it would yield a truncated authorization code that looks well formed.
+    let partial = Data("GET /callback?state=\(Self.state)&code=fake-authoriz".utf8)
+    #expect(LoopbackCallbackListener.requestLineOutcome(partial) == .incomplete)
+    #expect(LoopbackCallbackListener.parseRequestLine(partial) == nil)
+
+    // A terminator, once present, decides the outcome rather than deferring it.
+    #expect(LoopbackCallbackListener.requestLineOutcome(Data("garbage\r\n".utf8)) == .invalid)
+    #expect(LoopbackCallbackListener.requestLineOutcome(Data("GET".utf8)) == .incomplete)
+
+    // A bare LF terminator is accepted; HTTP mandates CRLF but a recipient may
+    // tolerate LF, and tolerating it here cannot truncate anything.
+    let bareLF = Data("GET /callback?code=abc&state=def HTTP/1.1\n".utf8)
+    let request = LoopbackCallbackListener.parseRequestLine(bareLF)
+    #expect(request?.queryValue("code") == "abc")
+  }
+
+  @Test("A request line split across TCP segments delivers the whole code")
+  func reassemblesSplitRequestLine() async throws {
+    let port = try LoopbackProbe.freePort()
+    let listener = LoopbackCallbackListener()
+    async let delivered = listener.awaitCallback(port: port, timeoutSeconds: 30)
+
+    // The split falls inside the code value, which is exactly where a partial
+    // read would truncate it.
+    let target = "/callback?state=\(Self.state)&code=\(Self.code)"
+    let answer = try await LoopbackProbe.sendChunked(
+      [
+        "GET \(target.prefix(target.count - 8))",
+        "\(target.suffix(8)) HTTP/1.1\r\nHost: localhost:\(port)\r\n\r\n"
+      ],
+      toPort: port
+    )
+
+    let rendered = try #require(String(data: answer, encoding: .utf8))
+    #expect(rendered.contains("200 OK"))
+    #expect(!rendered.contains(Self.code))
+
+    let request = try await delivered
+    #expect(request.queryValue("code") == Self.code, "The code must not be truncated by a split read")
+    #expect(request.queryValue("state") == Self.state)
+
+    // The reassembled request still satisfies the validator, so a split read
+    // produces a login that completes rather than one that reports a mismatch.
+    let result = try OAuthCallbackValidator.validate(
+      request,
+      expectedState: SecretValue(Self.state),
+      expectedPort: port
+    )
+    #expect(result.code.reveal() == Self.code)
+  }
+
+  @Test("A peer that sends no request line is refused rather than read forever")
+  func refusesTerminatorlessRequest() async throws {
+    let port = try LoopbackProbe.freePort()
+    let listener = LoopbackCallbackListener()
+    async let delivered = listener.awaitCallback(port: port, timeoutSeconds: 30)
+
+    // A well-formed start with no terminator, then a clean close. The listener
+    // must resolve on the close rather than wait out the login timeout.
+    _ = try await LoopbackProbe.sendChunked(
+      ["GET /callback?code=abc&state=def"],
+      toPort: port,
+      closeAfterSending: true
+    )
+
+    do {
+      _ = try await delivered
+      Issue.record("Expected the terminator-less request to be refused")
+    } catch let error as GatewayError {
+      #expect(error.code == .authenticationFailed)
+      #expect(!error.description.contains("abc"))
+    }
   }
 }

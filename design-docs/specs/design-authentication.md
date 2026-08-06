@@ -124,6 +124,14 @@ flow returns, so no port is left listening. It accepts exactly one request. The
 response body it writes back to the browser is a fixed confirmation string with
 a measured `Content-Length`; it carries no OAuth data.
 
+The listener reads until the request line is terminated rather than parsing
+whatever the first socket read returns. A browser is free to split the callback
+GET across TCP segments, and the authorization code and OAuth state make that
+line long enough for it to happen; parsing a partial line would truncate the
+code and send the truncated value to Wrike, which reports only `invalid_grant`.
+Reading is bounded, so a peer that sends no terminator is refused rather than
+read until the login timeout.
+
 What the callback must still prove is unchanged by dropping TLS:
 
 - the request arrived on the expected host, port, and path;
@@ -149,7 +157,19 @@ The refresh request uses the host/token URL rules returned by Wrike. New token
 state is written atomically before the old record is discarded. If persistence
 fails, the process does not claim login success and does not print either
 token. A 401 after one successful refresh is returned without a second refresh
-loop.
+loop, and the re-send that carries the refreshed credential does not consume one
+of the attempts the retry policy budgets for transient upstream conditions.
+
+A refresh response updates the record it was issued against; it does not replace
+it. RFC 6749 section 5.1 makes `scope` optional when it is unchanged, and
+section 6 makes reissuing a refresh token optional, so a response that omits
+`scope`, `refresh_token`, or `host` leaves the stored value in place. Reading an
+omitted field as an absent one would empty the granted scopes, which both
+misreports `auth status` and disables the local scope pre-check, or would force
+a new browser authorization while the stored refresh token is still valid. A
+present but empty `scope` is treated as omitted rather than as a grant of
+nothing. The authorization-code exchange has no prior record, so it still
+requires the access token, refresh token, and data-center host to be present.
 
 Refresh occurs before expiry using a bounded clock-skew allowance. Tests inject
 a clock and credential store to cover expiry, rotation, concurrent requests,

@@ -472,6 +472,99 @@ struct OAuthRefreshTests {
     #expect(await transport.requestCount == 1, "Refresh must not retry automatically")
   }
 
+  /// A refresh response that omits a field RFC 6749 lets the server omit must
+  /// leave the stored value in place rather than clear it. Only a live refresh
+  /// would show which fields Wrike actually repeats, so each optional field is
+  /// covered here through the injected transport.
+  @Test("A refresh response keeps the stored scopes, refresh token, and host when it omits them")
+  func refreshPreservesOmittedFields() async throws {
+    let clock = TestClock()
+    let (state, key) = expiredState(clock: clock)
+    let store = InMemoryCredentialStore(seed: [key: state])
+    // Only the access token and its lifetime are reported, which is the
+    // minimum RFC 6749 section 5.1 requires of a refresh response.
+    let transport = RecordingTransport.succeeding(json: """
+      {"access_token":"fake-new-access","expires_in":3600}
+      """)
+    let resolver = try makeResolver(transport: transport, store: store, clock: clock)
+
+    let credential = try await resolver.credential()
+    #expect(credential.grantedScopes == ["wsReadOnly"], "An omitted scope must not empty the grant")
+    #expect(credential.baseURL.absoluteString == "https://www.wrike.com/api/v4")
+
+    let stored = try #require(try await store.load(key))
+    #expect(stored.accessToken == SecretValue("fake-new-access"))
+    #expect(
+      stored.refreshToken == SecretValue("fake-old-refresh"),
+      "An unrotated refresh token stays usable rather than forcing a new authorization"
+    )
+    #expect(stored.grantedScopes == ["wsReadOnly"])
+    #expect(stored.host == "www.wrike.com")
+  }
+
+  @Test("A refresh response that reports its own values still replaces them")
+  func refreshAppliesReportedFields() async throws {
+    let clock = TestClock()
+    let (state, key) = expiredState(clock: clock)
+    let store = InMemoryCredentialStore(seed: [key: state])
+    let transport = RecordingTransport.succeeding(json: """
+      {"access_token":"fake-new-access","refresh_token":"fake-new-refresh",\
+      "expires_in":3600,"host":"app-eu.wrike.com","scope":"wsReadOnly,wsReadWrite"}
+      """)
+    let resolver = try makeResolver(transport: transport, store: store, clock: clock)
+
+    _ = try await resolver.credential()
+    let rotatedKey = CredentialRecordKey(clientID: state.clientID, host: "app-eu.wrike.com")
+    let stored = try #require(try await store.load(rotatedKey))
+    #expect(stored.refreshToken == SecretValue("fake-new-refresh"))
+    #expect(stored.grantedScopes == ["wsReadOnly", "wsReadWrite"])
+    #expect(stored.host == "app-eu.wrike.com")
+  }
+
+  @Test("An empty scope string is treated as omitted rather than as a grant of nothing")
+  func refreshIgnoresEmptyScope() async throws {
+    let clock = TestClock()
+    let (state, key) = expiredState(clock: clock)
+    let store = InMemoryCredentialStore(seed: [key: state])
+    let transport = RecordingTransport.succeeding(json: """
+      {"access_token":"fake-new-access","expires_in":3600,"scope":""}
+      """)
+    let resolver = try makeResolver(transport: transport, store: store, clock: clock)
+
+    _ = try await resolver.credential()
+    let stored = try #require(try await store.load(key))
+    #expect(stored.grantedScopes == ["wsReadOnly"])
+  }
+
+  /// The authorization-code exchange has no prior record to fall back on, so
+  /// the required fields stay required there.
+  @Test("An authorization-code exchange still requires a refresh token and a host")
+  func codeExchangeStillRequiresIssuedFields() async throws {
+    let bodies = [
+      "{\"access_token\":\"fake\",\"expires_in\":3600,\"host\":\"www.wrike.com\"}",
+      "{\"access_token\":\"fake\",\"refresh_token\":\"fake\",\"expires_in\":3600}"
+    ]
+    for body in bodies {
+      let exchange = try OAuthTokenExchange(
+        transport: RecordingTransport.succeeding(json: body),
+        tokenURL: URL(string: WrikeOAuthEndpoints.tokenURL)
+      )
+      await #expect(throws: GatewayError.self) {
+        _ = try await exchange.exchangeAuthorizationCode(
+          SecretValue("fake-code"),
+          client: OAuthClientConfiguration(
+            clientID: SecretValue("fake-client-id"),
+            clientSecret: SecretValue("fake-client-secret")
+          ),
+          redirectURI: WrikeOAuthEndpoints.redirectURI(
+            port: WrikeOAuthEndpoints.defaultCallbackPort
+          ),
+          now: Date(timeIntervalSince1970: 1_800_000_000)
+        )
+      }
+    }
+  }
+
   @Test("A 401 permits exactly one refresh attempt per request")
   func singleRefreshAfterUnauthorized() async throws {
     let apiTransport = RecordingTransport(outcomes: [

@@ -53,14 +53,18 @@ public struct OAuthTokenExchange: Sendable {
       WrikeQueryItem(name: "grant_type", value: "refresh_token"),
       WrikeQueryItem(name: "refresh_token", value: state.refreshToken.reveal())
     ]
-    return try await perform(form: form, client: client, now: now, isRefresh: true)
+    // A refresh response updates the record it was issued against rather than
+    // replacing it, so the previous state is carried in for the fields RFC 6749
+    // allows the server to omit.
+    return try await perform(form: form, client: client, now: now, isRefresh: true, previous: state)
   }
 
   private func perform(
     form: [WrikeQueryItem],
     client: OAuthClientConfiguration,
     now: Date,
-    isRefresh: Bool
+    isRefresh: Bool,
+    previous: OAuthTokenState? = nil
   ) async throws -> OAuthTokenState {
     let request = PreparedRequest(
       url: tokenURL,
@@ -103,7 +107,7 @@ public struct OAuthTokenExchange: Sendable {
       )
     }
 
-    return try decode(response.body, client: client, now: now)
+    return try decode(response.body, client: client, now: now, previous: previous)
   }
 
   /// Reads the OAuth `error` code from a failure body.
@@ -131,17 +135,38 @@ public struct OAuthTokenExchange: Sendable {
   /// Decodes the token response. Only the documented fields are read, and the
   /// reported data-center host is validated against the approved allowlist
   /// before it can be persisted or used to build a request URL.
-  func decode(_ body: Data, client: OAuthClientConfiguration, now: Date) throws -> OAuthTokenState {
+  ///
+  /// `previous` is the record a refresh was issued against, and it is `nil` for
+  /// an authorization-code exchange. A refresh response is an update rather
+  /// than a replacement: RFC 6749 section 5.1 makes `scope` optional when it is
+  /// unchanged, and section 6 makes reissuing a refresh token optional, so a
+  /// response that omits either must leave the stored value in place. Reading
+  /// an omitted field as an absent one would silently empty the granted scopes,
+  /// which both misreports `auth status` and disables the local scope
+  /// pre-check, or would force a new browser authorization while the stored
+  /// refresh token is still valid.
+  func decode(
+    _ body: Data,
+    client: OAuthClientConfiguration,
+    now: Date,
+    previous: OAuthTokenState? = nil
+  ) throws -> OAuthTokenState {
     guard let value = try? WrikeValue.decodeJSON(body), let fields = value.objectValue else {
       throw GatewayError.authentication("Wrike returned an unreadable token response.")
     }
     guard let accessToken = fields["access_token"]?.stringValue, !accessToken.isEmpty else {
       throw GatewayError.authentication("Wrike's token response did not contain an access token.")
     }
-    guard let refreshToken = fields["refresh_token"]?.stringValue, !refreshToken.isEmpty else {
+    let rotatedRefreshToken = fields["refresh_token"]?.stringValue.flatMap { token in
+      token.isEmpty ? nil : SecretValue(token)
+    }
+    guard let refreshToken = rotatedRefreshToken ?? previous?.refreshToken else {
       throw GatewayError.authentication("Wrike's token response did not contain a refresh token.")
     }
-    guard let host = fields["host"]?.stringValue, !host.isEmpty else {
+    let reportedHost = fields["host"]?.stringValue.flatMap { host in
+      host.isEmpty ? nil : host.lowercased()
+    }
+    guard let host = reportedHost ?? previous?.host else {
       throw GatewayError.authentication("Wrike's token response did not report a data-center host.")
     }
     _ = try hostPolicy.baseURL(forOAuthHost: host)
@@ -149,16 +174,19 @@ public struct OAuthTokenExchange: Sendable {
     let expiresIn = fields["expires_in"].flatMap { entry -> Int? in
       entry.intValue ?? entry.stringValue.flatMap(Int.init)
     } ?? 3600
-    let scopes = fields["scope"]?.stringValue.map { text in
+    // A present but empty `scope` carries no information, so it is treated the
+    // same as an omitted one rather than as a grant of nothing.
+    let reportedScopes = fields["scope"]?.stringValue.map { text in
       text.split(whereSeparator: { $0 == "," || $0 == " " }).map(String.init)
-    } ?? []
+    }.flatMap { $0.isEmpty ? nil : $0 }
+    let scopes = reportedScopes ?? previous?.grantedScopes ?? []
 
     return OAuthTokenState(
       accessToken: SecretValue(accessToken),
-      refreshToken: SecretValue(refreshToken),
+      refreshToken: refreshToken,
       expiresAt: now.addingTimeInterval(TimeInterval(max(0, expiresIn))),
       grantedScopes: scopes,
-      host: host.lowercased(),
+      host: host,
       clientID: client.clientID
     )
   }

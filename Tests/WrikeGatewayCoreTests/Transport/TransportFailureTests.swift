@@ -315,6 +315,51 @@ struct RetryPolicyTests {
     #expect(await transport.requestCount == 3)
   }
 
+  /// A refresh replaces a credential the upstream refused; it is not one of the
+  /// attempts budgeted for transient upstream conditions. Charging it to the
+  /// retry budget silently shortens every retry sequence that follows a token
+  /// expiry, which is the ordinary case for a long-lived OAuth session.
+  @Test("A credential refresh does not spend one of the budgeted retry attempts")
+  func refreshDoesNotConsumeARetry() async throws {
+    let success = WrikeResponse(
+      statusCode: 200,
+      body: Data(WrikeFixtures.envelope(kind: "widgets", data: "{\"id\":\"W1\"}").utf8)
+    )
+    let transport = RecordingTransport(
+      outcomes: [
+        .response(WrikeResponse(statusCode: 401, body: Data(WrikeFixtures.errorBody.utf8))),
+        .response(WrikeResponse(statusCode: 500, body: Data("{}".utf8))),
+        .response(WrikeResponse(statusCode: 500, body: Data("{}".utf8))),
+        .response(success)
+      ],
+      repeatsFinalOutcome: false
+    )
+    let refreshed = ResolvedCredential(
+      mode: .oauth2,
+      token: SecretValue("fake-refreshed"),
+      // A fixed valid fixture base URL.
+      // swiftlint:disable:next force_unwrapping
+      baseURL: URL(string: "https://www.wrike.com/api/v4")!,
+      grantedScopes: [],
+      expiresAt: nil
+    )
+    let clock = TestClock()
+    let executor = try TransportTestCapabilities.executor(
+      transport: transport,
+      clock: clock,
+      retryPolicy: RetryPolicy(maximumAttempts: 3, jitterFraction: 0),
+      credentials: StubCredentialProvider(refreshed: refreshed)
+    )
+
+    let result = try await executor.execute(TransportTestCapabilities.invocation("W1"))
+    #expect(result["id"]?.stringValue == "W1")
+    #expect(
+      await transport.requestCount == 4,
+      "One refused attempt, one refreshed attempt, and the two retries the policy budgets"
+    )
+    #expect(clock.recordedSleeps.count == 2, "Only the two 500 responses are backed off")
+  }
+
   @Test("A mutation never retries and reports an unknown outcome")
   func mutationsDoNotRetry() async throws {
     let transport = RecordingTransport(outcomes: [.failure(.timedOut)])
