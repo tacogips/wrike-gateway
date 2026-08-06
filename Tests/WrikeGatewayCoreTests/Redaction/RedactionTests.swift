@@ -68,18 +68,20 @@ struct StructuralRedactionTests {
       expiresAt: Date(timeIntervalSince1970: 1_900_000_000),
       isExpired: false,
       hasRefreshState: true,
-      hasClientConfiguration: true,
-      hasCallbackTLSIdentity: true
+      hasClientConfiguration: true
     )
     let rendered = report.stableValue.encodedJSON(pretty: true)
     for secret in FakeSecrets.all {
       #expect(!rendered.contains(secret))
     }
     #expect(rendered.contains("\"refreshStateAvailable\": true"))
-    #expect(rendered.contains("\"callbackIdentityAvailable\": true"))
-    // The identity is reported as a boolean only.
+    // The callback runs plain HTTP on the loopback interface, so there is no
+    // TLS identity to report. The field was removed rather than reported as a
+    // constant, and no certificate or credential-store record data replaced it.
+    #expect(!rendered.contains("callbackIdentityAvailable"))
     #expect(!rendered.lowercased().contains("certificate"))
     #expect(!rendered.lowercased().contains("keychain"))
+    #expect(!rendered.lowercased().contains("identity"))
   }
 
   @Test("A recorded request holds no authorization header value")

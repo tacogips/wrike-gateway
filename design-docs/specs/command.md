@@ -142,24 +142,18 @@ wrike-gateway-reader auth logout
 operating-system browser API and never writes that URL, its OAuth state, the
 client id, authorization codes, access tokens, refresh tokens, permanent
 tokens, or client secrets to stdout, stderr, or logs. The initial contract has
-no manual-URL output mode. The redirect URI must use HTTPS, match the Wrike
-application registration, and resolve to the loopback callback service at
-`https://localhost:<port>/callback`. The port comes from
+no manual-URL output mode. The redirect URI must match the Wrike application
+registration and resolve to the loopback callback service at
+`http://localhost:<port>/callback`. The port comes from
 `WRIKE_GATEWAY_OAUTH_CALLBACK_PORT` and defaults to `8765`; the scheme, host,
-and path are fixed, and no flag carries any of them. The service is bound only
-for the duration of one login. Before browser launch, it requires one valid,
-trusted certificate/private-key identity in the current user's macOS login
-Keychain under the fixed label `wrike-gateway.oauth.localhost`. Missing or
-invalid identity state fails with exit code `3`; the command does not generate,
-import, export, or trust certificates. The resolved callback strategy is
-documented in `design-docs/user-qa/qa-oauth-callback.md`: the fixed callback
-and identity label stay, a future release adds opt-in guided certificate
-setup, and configurable callbacks and manual handoff stay out of scope.
+and path are fixed, and no flag carries any of them. The service speaks plain
+HTTP bound to the loopback interface only, per RFC 8252 section 7.3, and is
+bound only for the duration of one login. It needs no certificate and reads
+nothing from the Keychain. The resolved callback strategy is documented in
+`design-docs/user-qa/qa-oauth-callback.md`.
 
 `auth status` reports only the selected credential kind, account host, scopes,
-expiry status, whether refresh state is available, and whether a valid callback
-TLS identity is available. This last value is a boolean and exposes no
-certificate or Keychain record data. If
+expiry status, and whether refresh state is available. If
 `WRIKE_GATEWAY_ACCESS_TOKEN` is present, OAuth login and refresh state are not
 used for that process. Permanent-token mode also requires
 `WRIKE_GATEWAY_API_BASE_URL`; there is no host default or token-based discovery.

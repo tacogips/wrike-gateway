@@ -164,11 +164,12 @@ credentials are supplied by kinko-managed environment variables
 are stored through a credential-store protocol, with kinko as the required
 initial backend.
 
-The fixed OAuth callback obtains an opaque TLS identity handle from the current
-user's macOS login Keychain under the Keychain label
-`wrike-gateway.oauth.localhost`. Identity lookup and trust validation sit behind
-an injectable core boundary. Private-key material never leaves Keychain, and a
-missing or invalid identity fails before listener startup or browser launch.
+The OAuth callback is a plain HTTP service bound to the loopback interface for
+the duration of one login, per RFC 8252 section 7.3. It holds no certificate
+and reads nothing from the Keychain; loopback-only reachability is the property
+that keeps the authorization code on this machine. The port comes from
+`WRIKE_GATEWAY_OAUTH_CALLBACK_PORT` and defaults to `8765`, so the redirect URI
+can match the one registered for the Wrike application.
 
 The resolved Wrike data-center host is stored with token state. Requests must
 not assume that every account uses `www.wrike.com`. See

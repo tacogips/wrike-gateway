@@ -3,7 +3,7 @@
 ## Status
 
 Implemented. Credential modes, resolution precedence, the OAuth2 flow, the
-callback TLS identity boundary, refresh handling, and redaction rules described
+HTTP loopback callback boundary, refresh handling, and redaction rules described
 below are in place and covered by tests.
 
 Credential storage is implemented, its command contract is pinned against the
@@ -73,7 +73,7 @@ approved-host policy. A missing or invalid base URL fails locally with
 
 1. Read the kinko-provisioned client id and secret.
 2. Generate and retain an unguessable state value for the pending flow.
-3. Start a loopback callback listener on the fixed initial redirect URI.
+3. Start the loopback callback listener on the configured port.
 4. Open the Wrike authorization URL through the operating-system browser API
    without emitting the URL to stdout, stderr, or logs.
 5. Reject callbacks with mismatched state, unexpected path/host, missing code,
@@ -83,20 +83,21 @@ approved-host policy. A missing or invalid base URL fails locally with
    data-center host atomically through the credential store.
 8. Clear transient code and state values from memory as soon as practical.
 
-The redirect is `https://localhost:<port>/callback`, matching Wrike's HTTPS
-requirement for registered redirect URIs and its localhost guidance. The URI
-must match one registered for the Wrike application.
+The redirect is `http://localhost:<port>/callback`. The URI must match one
+registered for the Wrike application; Wrike matches registered redirect URIs
+exactly, so the port and path registered are the port and path that must be
+used.
 
 The scheme, host, and path are fixed; only the port is configurable, through
 `WRIKE_GATEWAY_OAUTH_CALLBACK_PORT`, defaulting to `8765`. The registered
 redirect URI differs per Wrike application, so a fixed port made the flow
 unusable against an application registered on another port. Because only the
-port varies, no configuration can send an authorization code anywhere but an
-HTTPS loopback listener on this machine. There is still no redirect URI, host,
-or path override, and no CLI flag carries any of them.
+port varies, no configuration can send an authorization code anywhere but a
+loopback listener on this machine. There is still no redirect URI, host, or
+path override, and no CLI flag carries any of them.
 
 A malformed or out-of-range port fails locally, at composition, before the
-identity check or any listener binding, rather than silently reverting to the
+any listener binding, rather than silently reverting to the
 default: a service listening on a port the operator did not intend cannot
 receive the redirect, and the reason would not be obvious.
 
@@ -105,51 +106,37 @@ the flow returns. If the browser cannot be opened, the command fails with safe
 guidance rather than printing the URL, because the URL contains the client id
 and OAuth state.
 
-## OAuth Callback TLS Identity
+## OAuth Callback Transport
 
-The initial listener loads exactly one certificate/private-key identity from
-the current user's macOS login Keychain using the fixed Keychain label
-`wrike-gateway.oauth.localhost`. Creating, signing, trusting, renewing, and
-importing that identity are operator-managed prerequisites; the CLI does not
-generate certificates, import private keys, or modify trust settings.
+The callback service speaks plain HTTP on the loopback interface. It holds no
+certificate, reads nothing from the macOS Keychain, and requires no operator
+certificate provisioning or trust change.
 
-The label match is applied by the loader, not by the Keychain query. A
-`kSecClassIdentity` query against a file-based login Keychain silently ignores
-`kSecAttrLabel` and `kSecAttrApplicationLabel` and returns every identity the
-user holds, and it does not return `kSecAttrApplicationLabel` at all. A
-query-side filter would therefore report an ambiguous identity on any machine
-holding more than one identity, which is the normal state of a developer
-machine. The loader enumerates identities and selects on the readable
-`kSecAttrLabel`, which is the attribute the operator provisions.
+This follows RFC 8252 section 7.3: a native application cannot hold a
+certificate a browser will trust for `localhost`, so the loopback interface
+redirect is specified to use `http`. The security property that replaces TLS is
+the bind itself. The listener sets `requiredInterfaceType = .loopback`, so the
+socket is reachable only over loopback and the authorization code never
+traverses a network the operator does not control.
 
-Before binding the listener or opening the browser, the identity loader must
-verify that:
+The service is bound immediately before the browser opens and stops when the
+flow returns, so no port is left listening. It accepts exactly one request. The
+response body it writes back to the browser is a fixed confirmation string with
+a measured `Content-Length`; it carries no OAuth data.
 
-- exactly one identity matches the fixed label;
-- the certificate is currently valid and has `localhost` as a DNS subject
-  alternative name;
-- the certificate permits TLS server authentication;
-- macOS trust evaluation accepts its chain for `https://localhost`; and
-- the associated private key is available through the Keychain identity.
+What the callback must still prove is unchanged by dropping TLS:
 
-A missing, ambiguous, expired, untrusted, hostname-incompatible, or inaccessible
-identity fails locally with `AUTHENTICATION_FAILED` and CLI exit code `3` before
-the listener or browser starts. Recovery guidance may name the fixed Keychain
-label and required certificate properties, but must not include certificate
-contents, private-key material, Keychain record data, OAuth state, or the
-authorization URL.
+- the request arrived on the expected host, port, and path;
+- the `state` matches the pending flow, compared in constant time;
+- an OAuth `error` parameter is treated as a failure; and
+- an authorization code is present.
 
-The private key never leaves Keychain. Runtime code receives only an opaque
-identity handle; it must not export the key to kinko, environment variables,
-temporary files, repository files, diagnostics, or test snapshots. Kinko
-continues to own OAuth token records, not callback TLS identities. An injected
-identity-loader boundary supplies deterministic success and failure fixtures in
-tests without adding a production CLI override.
+Any mismatch fails locally with `AUTHENTICATION_FAILED` and CLI exit code `3`.
+A callback that never arrives fails on a bounded timeout, and the listener is
+cancelled so the port is released rather than left bound.
 
-The resolved callback strategy in
-`design-docs/user-qa/qa-oauth-callback.md` keeps the fixed callback and
-identity label, plans an opt-in guided certificate setup command for a future
-release, and rules out configurable callbacks and manual handoff.
+The resolved callback strategy is recorded in
+`design-docs/user-qa/qa-oauth-callback.md`.
 
 ## Refresh Flow
 
@@ -329,13 +316,16 @@ Wrike's application console and documented in the command guidance.
 - Unit tests cover precedence, empty values, required permanent-token base URL,
   host and `/api/v4` path validation, redaction, clock skew, scope checks,
   refresh rotation, single-flight behavior, and atomic storage failure.
-- Loopback tests cover callback state validation, timeout, code exchange, and
-  TLS redirect rejection without live credentials. Tests also prove that no
-  redirect URI flag or environment override is accepted by the initial
-  contract.
-- TLS identity tests cover missing, duplicate, expired, untrusted,
-  hostname-incompatible, wrong-key-usage, inaccessible-private-key, and valid
-  Keychain identity outcomes before browser launch.
+- Loopback tests cover callback state validation, timeout, and code exchange
+  without live credentials. Tests also prove that no redirect URI, host, or
+  path flag or environment override is accepted.
+- Real-socket tests drive the production listener rather than a stub, because
+  the properties under test live in the socket layer: an end-to-end HTTP
+  callback delivery, loopback-only reachability with no routable interface
+  address answering, a bounded timeout that releases the port, a port already
+  in use reported with actionable guidance, an out-of-range port refused before
+  any socket is created, and a non-GET or unparsable request refused rather
+  than delivered.
 - Test fixtures use unmistakably fake values and assert that none appear in
   captured stdout or stderr.
 - `task build`, `task test`, and `swiftlint` pass after implementation.

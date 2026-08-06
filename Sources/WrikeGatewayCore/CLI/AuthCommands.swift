@@ -8,18 +8,15 @@ import Foundation
 public struct AuthCommands: Sendable {
   private let resolver: CredentialResolver
   private let environment: any EnvironmentReader
-  private let identityLoader: any CallbackTLSIdentityLoader
   private let makeLoginFlow: @Sendable (OAuthClientConfiguration, CapabilityTier) throws -> OAuthLoginFlow?
 
   public init(
     resolver: CredentialResolver,
     environment: any EnvironmentReader,
-    identityLoader: any CallbackTLSIdentityLoader,
     makeLoginFlow: @escaping @Sendable (OAuthClientConfiguration, CapabilityTier) throws -> OAuthLoginFlow?
   ) {
     self.resolver = resolver
     self.environment = environment
-    self.identityLoader = identityLoader
     self.makeLoginFlow = makeLoginFlow
   }
 
@@ -60,8 +57,7 @@ public struct AuthCommands: Sendable {
         expiresAt: state.expiresAt,
         isExpired: false,
         hasRefreshState: true,
-        hasClientConfiguration: true,
-        hasCallbackTLSIdentity: true
+        hasClientConfiguration: true
       )
       return Self.success(.object(["authorized": .bool(true), "status": report.stableValue]))
     } catch let error as GatewayError {
@@ -70,16 +66,11 @@ public struct AuthCommands: Sendable {
   }
 
   public func status() async -> CommandOutcome {
-    // Identity availability is reported as a boolean only; no certificate or
-    // Keychain record data is read into the output.
-    let hasIdentity = (try? identityLoader.loadIdentity(
-      label: WrikeOAuthEndpoints.callbackIdentityLabel
-    )) != nil
     do {
       // A credential store that cannot answer is not an empty store. Surfacing
       // the error keeps the `kinko unlock` guidance intact instead of reporting
       // a locked vault as "no credential is configured".
-      let report = try await resolver.status(hasCallbackIdentity: hasIdentity)
+      let report = try await resolver.status()
       return Self.success(report.stableValue)
     } catch let error as GatewayError {
       return Self.failure(error)

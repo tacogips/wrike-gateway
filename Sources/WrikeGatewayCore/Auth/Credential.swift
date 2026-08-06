@@ -70,7 +70,12 @@ public struct ResolvedCredential: Sendable {
 /// The safe subset reported by `auth status`.
 ///
 /// Every field is a mode name, host, scope name, timestamp, or boolean. No
-/// token, client id, client secret, or Keychain record data appears here.
+/// token, client id, client secret, or credential-store record data appears
+/// here.
+///
+/// `callbackIdentityAvailable` was removed when the OAuth callback moved to
+/// plain HTTP on the loopback interface: no TLS identity exists any more, so
+/// the field had no value it could truthfully report.
 public struct AuthStatusReport: Sendable, Equatable {
   public let mode: CredentialMode?
   public let host: String?
@@ -79,7 +84,6 @@ public struct AuthStatusReport: Sendable, Equatable {
   public let isExpired: Bool
   public let hasRefreshState: Bool
   public let hasClientConfiguration: Bool
-  public let hasCallbackTLSIdentity: Bool
 
   public init(
     mode: CredentialMode?,
@@ -88,8 +92,7 @@ public struct AuthStatusReport: Sendable, Equatable {
     expiresAt: Date?,
     isExpired: Bool,
     hasRefreshState: Bool,
-    hasClientConfiguration: Bool,
-    hasCallbackTLSIdentity: Bool
+    hasClientConfiguration: Bool
   ) {
     self.mode = mode
     self.host = host
@@ -98,7 +101,6 @@ public struct AuthStatusReport: Sendable, Equatable {
     self.isExpired = isExpired
     self.hasRefreshState = hasRefreshState
     self.hasClientConfiguration = hasClientConfiguration
-    self.hasCallbackTLSIdentity = hasCallbackTLSIdentity
   }
 
   public var stableValue: WrikeValue {
@@ -110,8 +112,7 @@ public struct AuthStatusReport: Sendable, Equatable {
       "expiresAt": expiresAt.map { .string(formatter.string(from: $0)) } ?? .null,
       "expired": .bool(isExpired),
       "refreshStateAvailable": .bool(hasRefreshState),
-      "clientConfigured": .bool(hasClientConfiguration),
-      "callbackIdentityAvailable": .bool(hasCallbackTLSIdentity)
+      "clientConfigured": .bool(hasClientConfiguration)
     ])
   }
 }

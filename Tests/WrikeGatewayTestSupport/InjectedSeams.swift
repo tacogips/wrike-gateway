@@ -73,33 +73,6 @@ public struct StubCredentialProvider: CredentialProvider {
   }
 }
 
-/// Returns a fixed identity outcome, covering every documented Keychain state
-/// without a provisioned identity and without a production override.
-public struct StubIdentityLoader: CallbackTLSIdentityLoader {
-  public enum Behavior: Sendable {
-    case valid
-    case failure(CallbackTLSIdentityFailure)
-  }
-
-  private let behavior: Behavior
-  private let attempts: Counter
-
-  public init(_ behavior: Behavior, attempts: Counter = Counter()) {
-    self.behavior = behavior
-    self.attempts = attempts
-  }
-
-  public func loadIdentity(label: String) throws -> CallbackTLSIdentityHandle {
-    attempts.increment()
-    switch behavior {
-    case .valid:
-      return CallbackTLSIdentityHandle(reference: "test-identity")
-    case .failure(let failure):
-      throw failure.asGatewayError(label: label)
-    }
-  }
-}
-
 /// Replays a canned OAuth callback, recording that it was reached at all.
 public struct StubCallbackListener: OAuthCallbackListener {
   public enum Behavior: Sendable {
@@ -124,7 +97,6 @@ public struct StubCallbackListener: OAuthCallbackListener {
   }
 
   public func awaitCallback(
-    identity: CallbackTLSIdentityHandle,
     port: Int,
     timeoutSeconds: Double
   ) async throws -> OAuthCallbackRequest {

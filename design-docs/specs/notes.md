@@ -59,13 +59,11 @@ These names are normative across specifications and the implementation plan.
 All four launch decisions were resolved on 2026-08-05 (user delegated to the
 assistant's recommendation); the answers confirm the conservative defaults:
 
-- OAuth callback: registered TLS loopback
-  `https://localhost:<port>/callback`, where the port comes from
-  `WRIKE_GATEWAY_OAUTH_CALLBACK_PORT` and defaults to `8765`, with no HTTP
-  downgrade or authorization-URL
-  output; the operator provisions one trusted certificate/private-key identity
-  in the macOS login Keychain under `wrike-gateway.oauth.localhost`. A future
-  release adds an opt-in guided certificate setup command. See
+- OAuth callback: registered loopback `http://localhost:<port>/callback`, where
+  the port comes from `WRIKE_GATEWAY_OAUTH_CALLBACK_PORT` and defaults to
+  `8765`, with no authorization-URL output. The service is plain HTTP bound to
+  loopback only, per RFC 8252 section 7.3; it needs no certificate and no
+  Keychain access. This supersedes the earlier TLS-plus-Keychain answer. See
   `design-docs/user-qa/qa-oauth-callback.md`.
 - Token storage: kinko-backed records with no plaintext fallback; one default
   account record initially, multi-account representable later. See

@@ -39,8 +39,14 @@ public enum WrikeOAuthEndpoints {
   public static let defaultCallbackPort = 8765
 
   /// The redirect URI for a given callback port.
+  ///
+  /// The scheme is `http` by design, per RFC 8252 section 7.3: a native
+  /// application cannot hold a certificate a browser will trust for
+  /// `localhost`, so the loopback interface redirect is specified to use http.
+  /// The authorization code never leaves this machine, because the listener
+  /// binds the loopback interface only.
   public static func redirectURI(port: Int) -> String {
-    "https://\(callbackHost):\(port)\(callbackPath)"
+    "http://\(callbackHost):\(port)\(callbackPath)"
   }
 
   /// Resolves the callback port from the environment, falling back to the
@@ -69,9 +75,6 @@ public enum WrikeOAuthEndpoints {
     return port
   }
 
-  /// The fixed macOS login-Keychain application label for the callback identity.
-  public static let callbackIdentityLabel = "wrike-gateway.oauth.localhost"
-
   /// The parts of the fixed redirect URI that the callback validator checks.
   public struct RedirectComponents: Sendable, Equatable {
     public let host: String
@@ -81,14 +84,14 @@ public enum WrikeOAuthEndpoints {
 
   public static func components(ofRedirectURI raw: String) -> RedirectComponents? {
     guard let components = URLComponents(string: raw),
-          components.scheme?.lowercased() == "https",
+          components.scheme?.lowercased() == "http",
           let host = components.host
     else {
       return nil
     }
     return RedirectComponents(
       host: host.lowercased(),
-      port: components.port ?? 443,
+      port: components.port ?? 80,
       path: components.path
     )
   }

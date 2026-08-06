@@ -427,11 +427,15 @@ struct ExecutableRuntimeBoundaryTests {
       let result = try BuiltProducts.run(name, ["auth", "status"])
       #expect(result.exitCode == 0, "\(name)")
       #expect(result.standardOutput.contains("\"clientConfigured\":false"), "\(name)")
-      #expect(result.standardOutput.contains("\"callbackIdentityAvailable\""), "\(name)")
+      #expect(result.standardOutput.contains("\"refreshStateAvailable\":false"), "\(name)")
       let lowered = result.standardOutput.lowercased()
       #expect(!lowered.contains("token\":\""), "\(name)")
       #expect(!lowered.contains("secret"), "\(name)")
       #expect(!lowered.contains("certificate"), "\(name)")
+      // The callback no longer uses a TLS identity, so the removed field must
+      // not reappear in any binary's status output.
+      #expect(!lowered.contains("callbackidentityavailable"), "\(name)")
+      #expect(!lowered.contains("keychain"), "\(name)")
     }
   }
 

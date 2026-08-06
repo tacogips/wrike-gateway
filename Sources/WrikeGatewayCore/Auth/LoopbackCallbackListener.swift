@@ -1,34 +1,26 @@
 import Foundation
 import Network
-import Security
 
 /// The production OAuth callback listener.
 ///
-/// It binds HTTPS on the fixed loopback port using the validated Keychain
-/// identity, accepts exactly one request, and returns its host, port, path, and
-/// query. It never writes the request line, the OAuth state, or the
-/// authorization code to any output.
+/// It binds plain HTTP on the configured loopback port, accepts exactly one
+/// request, and returns its host, port, path, and query. It never writes the
+/// request line, the OAuth state, or the authorization code to any output.
+///
+/// The transport is http rather than https by design, per RFC 8252 section 7.3:
+/// a native application cannot hold a certificate a browser will trust for
+/// `localhost`, so the loopback interface redirect is specified to use http.
+/// `requiredInterfaceType = .loopback` is the security property that replaces
+/// TLS here: the socket is reachable only over the loopback interface, so the
+/// authorization code never traverses a network the operator does not control.
 public struct LoopbackCallbackListener: OAuthCallbackListener {
   public init() {}
 
   public func awaitCallback(
-    identity: CallbackTLSIdentityHandle,
     port callbackPort: Int,
     timeoutSeconds: Double
   ) async throws -> OAuthCallbackRequest {
-    guard let payload = identity.payload else {
-      throw GatewayError.authentication("The callback TLS identity is not usable for this listener.")
-    }
-    // The identity is a `SecIdentity` supplied by `KeychainTLSIdentityLoader`.
-    let secIdentity = payload.identity as! SecIdentity // swiftlint:disable:this force_cast
-    guard let secured = sec_identity_create(secIdentity) else {
-      throw CallbackTLSIdentityFailure.privateKeyUnavailable
-        .asGatewayError(label: WrikeOAuthEndpoints.callbackIdentityLabel)
-    }
-
-    let tlsOptions = NWProtocolTLS.Options()
-    sec_protocol_options_set_local_identity(tlsOptions.securityProtocolOptions, secured)
-    let parameters = NWParameters(tls: tlsOptions)
+    let parameters = NWParameters.tcp
     parameters.requiredInterfaceType = .loopback
     parameters.allowLocalEndpointReuse = true
 
@@ -65,53 +57,84 @@ public struct LoopbackCallbackListener: OAuthCallbackListener {
     listener: NWListener,
     port callbackPort: Int
   ) async throws -> OAuthCallbackRequest {
-    try await withCheckedThrowingContinuation { continuation in
-      let resumed = LockedBox(false)
-      let finish: @Sendable (Result<OAuthCallbackRequest, any Error>) -> Void = { result in
-        // A bind failure and a connection failure can arrive concurrently on
-        // the global queue, so the guard must claim the continuation under a
-        // single lock acquisition; a check-then-act pair would let both
-        // callbacks resume it, which traps at runtime.
-        guard resumed.markResumed() else { return }
-        continuation.resume(with: result)
-      }
+    let resumed = LockedBox(false)
+    // The cancellation handler cancels the listener, which drives the state
+    // handler to `.cancelled` and resumes the continuation. Without it, the
+    // timeout branch of the enclosing group wins, this task is cancelled, and
+    // the continuation is never resumed: the task stays suspended forever and
+    // the runtime reports a leaked continuation.
+    return try await withTaskCancellationHandler {
+      try await withCheckedThrowingContinuation { continuation in
+        let finish: @Sendable (Result<OAuthCallbackRequest, any Error>) -> Void = { result in
+          // A bind failure, a cancellation, and a connection failure can arrive
+          // concurrently on the global queue, so the guard must claim the
+          // continuation under a single lock acquisition; a check-then-act pair
+          // would let two callbacks resume it, which traps at runtime.
+          guard resumed.markResumed() else { return }
+          continuation.resume(with: result)
+        }
 
-      listener.stateUpdateHandler = { state in
-        if case .failed = state {
+        // A listener cancelled before it is started never reports a state, so
+        // an already-cancelled task is resolved here rather than waited on.
+        if Task.isCancelled {
           finish(.failure(GatewayError.authentication(
-            "The OAuth callback listener could not bind the configured loopback port.",
-            recovery: "Ensure no other process is using port \(callbackPort), or set "
-              + "\(GatewayEnvironmentKey.oauthCallbackPort.rawValue) to a free port that "
-              + "matches a redirect URI registered for the Wrike application."
+            "The OAuth callback listener stopped before a callback arrived."
           )))
+          return
         }
-      }
 
-      listener.newConnectionHandler = { connection in
-        connection.start(queue: .global())
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 8192) { data, _, _, error in
-          defer {
-            // A minimal response body keeps the browser tab from showing an
-            // error; it contains no OAuth data.
-            let body = "HTTP/1.1 200 OK\r\nContent-Length: 22\r\nConnection: close\r\n\r\n"
-              + "Authorization complete."
-            connection.send(
-              content: Data(body.utf8),
-              completion: .contentProcessed { _ in connection.cancel() }
-            )
+        listener.stateUpdateHandler = { state in
+          switch state {
+          case .failed:
+            finish(.failure(GatewayError.authentication(
+              "The OAuth callback listener could not bind the configured loopback port.",
+              recovery: "Ensure no other process is using port \(callbackPort), or set "
+                + "\(GatewayEnvironmentKey.oauthCallbackPort.rawValue) to a free port that "
+                + "matches a redirect URI registered for the Wrike application."
+            )))
+          case .cancelled:
+            finish(.failure(GatewayError.authentication(
+              "The OAuth callback listener stopped before a callback arrived."
+            )))
+          default:
+            break
           }
-          if error != nil {
-            finish(.failure(GatewayError.authentication("The OAuth callback connection failed.")))
-            return
-          }
-          guard let data, let request = parseRequestLine(data, port: callbackPort) else {
-            finish(.failure(GatewayError.authentication("The OAuth callback request was unreadable.")))
-            return
-          }
-          finish(.success(request))
         }
+
+        listener.newConnectionHandler = { connection in
+          connection.start(queue: .global())
+          connection.receive(minimumIncompleteLength: 1, maximumLength: 8192) { data, _, _, error in
+            defer {
+              // A minimal response body keeps the browser tab from showing an
+              // error; it contains no OAuth data. The length is measured rather
+              // than written by hand, so the browser cannot receive a truncated
+              // body from a header that disagrees with it.
+              let payload = "Authorization complete."
+              let body = "HTTP/1.1 200 OK\r\nContent-Length: \(payload.utf8.count)\r\n"
+                + "Content-Type: text/plain; charset=utf-8\r\nConnection: close\r\n\r\n"
+                + payload
+              connection.send(
+                content: Data(body.utf8),
+                completion: .contentProcessed { _ in connection.cancel() }
+              )
+            }
+            if error != nil {
+              finish(.failure(GatewayError.authentication("The OAuth callback connection failed.")))
+              return
+            }
+            guard let data, let request = parseRequestLine(data, port: callbackPort) else {
+              finish(.failure(
+                GatewayError.authentication("The OAuth callback request was unreadable.")
+              ))
+              return
+            }
+            finish(.success(request))
+          }
+        }
+        listener.start(queue: .global())
       }
-      listener.start(queue: .global())
+    } onCancel: {
+      listener.cancel()
     }
   }
 
@@ -126,7 +149,7 @@ public struct LoopbackCallbackListener: OAuthCallbackListener {
     let parts = line.split(separator: " ")
     guard parts.count >= 2, parts[0] == "GET" else { return nil }
     let target = String(parts[1])
-    guard let components = URLComponents(string: "https://\(WrikeOAuthEndpoints.callbackHost)\(target)") else {
+    guard let components = URLComponents(string: "http://\(WrikeOAuthEndpoints.callbackHost)\(target)") else {
       return nil
     }
     let items = (components.queryItems ?? []).map {

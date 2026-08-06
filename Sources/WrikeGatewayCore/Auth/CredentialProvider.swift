@@ -168,7 +168,7 @@ public actor CredentialResolver: CredentialProvider {
   /// store could not be read or the permanent-token configuration is invalid.
   /// Reporting the second case as the first tells an operator to re-authorize a
   /// vault that already holds a valid refresh token, so both failures propagate.
-  public func status(hasCallbackIdentity: Bool) async throws -> AuthStatusReport {
+  public func status() async throws -> AuthStatusReport {
     let hasClient = OAuthClientConfiguration.resolve(from: environment) != nil
     if environment.nonEmptyValue(for: .accessToken) != nil {
       // A rejected or missing base URL is a real misconfiguration; permanent
@@ -182,8 +182,7 @@ public actor CredentialResolver: CredentialProvider {
         expiresAt: nil,
         isExpired: false,
         hasRefreshState: false,
-        hasClientConfiguration: hasClient,
-        hasCallbackTLSIdentity: hasCallbackIdentity
+        hasClientConfiguration: hasClient
       )
     }
     let state = try await loadState()
@@ -194,8 +193,7 @@ public actor CredentialResolver: CredentialProvider {
       expiresAt: state?.expiresAt,
       isExpired: state.map { $0.expiresAt <= clock.now } ?? false,
       hasRefreshState: state != nil,
-      hasClientConfiguration: hasClient,
-      hasCallbackTLSIdentity: hasCallbackIdentity
+      hasClientConfiguration: hasClient
     )
   }
 

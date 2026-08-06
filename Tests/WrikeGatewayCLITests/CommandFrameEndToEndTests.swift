@@ -15,7 +15,6 @@ private enum FrameHarness {
     definitions: [CapabilityDefinition],
     transport: RecordingTransport,
     files: [String: String] = [:],
-    identity: StubIdentityLoader.Behavior = .valid,
     store: any CredentialStore = InMemoryCredentialStore(),
     environment: StaticEnvironmentReader = StaticEnvironmentReader()
   ) throws -> CommandFrame {
@@ -37,7 +36,6 @@ private enum FrameHarness {
     let auth = AuthCommands(
       resolver: resolver,
       environment: environment,
-      identityLoader: StubIdentityLoader(identity),
       makeLoginFlow: { _, _ in nil }
     )
     return CommandFrame(
@@ -59,7 +57,6 @@ private enum FrameHarness {
   static func reader(
     transport: RecordingTransport,
     files: [String: String] = [:],
-    identity: StubIdentityLoader.Behavior = .valid,
     store: any CredentialStore = InMemoryCredentialStore(),
     environment: StaticEnvironmentReader = StaticEnvironmentReader()
   ) throws -> CommandFrame {
@@ -68,7 +65,6 @@ private enum FrameHarness {
       definitions: ReadCapabilities.all,
       transport: transport,
       files: files,
-      identity: identity,
       store: store,
       environment: environment
     )
@@ -220,17 +216,17 @@ struct ReaderCommandEndToEndTests {
     #expect(!outcome.standardOutput.contains("type Mutation {"))
   }
 
-  @Test("auth status reports a missing identity as a boolean, not an error")
-  func authStatusWithoutIdentity() async throws {
-    let frame = try FrameHarness.reader(
-      transport: taskTransport(),
-      identity: .failure(.missing)
-    )
+  @Test("auth status reports no credential without inventing one, and no identity field")
+  func authStatusWithoutCredential() async throws {
+    let frame = try FrameHarness.reader(transport: taskTransport())
     let outcome = await frame.run(arguments: ["auth", "status"])
 
     #expect(outcome.exitCode == .success)
-    #expect(outcome.standardOutput.contains("\"callbackIdentityAvailable\":false"))
     #expect(outcome.standardOutput.contains("\"mode\":null"))
+    // Deliberate contract change: the callback is plain HTTP on loopback, so
+    // there is no TLS identity and the field no longer exists.
+    #expect(!outcome.standardOutput.contains("callbackIdentityAvailable"))
+    #expect(!outcome.standardOutput.lowercased().contains("identity"))
   }
 
   @Test("auth status reports permanent-token mode without reading the token")

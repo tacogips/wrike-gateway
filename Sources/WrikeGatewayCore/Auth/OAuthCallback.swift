@@ -79,14 +79,14 @@ public enum OAuthCallbackValidator {
   }
 }
 
-/// The loopback listener boundary. The production implementation binds the
-/// fixed HTTPS port using the Keychain identity; tests substitute a listener
-/// that replays a canned callback.
+/// The loopback listener boundary. The production implementation binds plain
+/// HTTP on the loopback interface; tests substitute a listener that replays a
+/// canned callback.
 public protocol OAuthCallbackListener: Sendable {
   /// Binds the listener on `port` and waits for one callback, or throws on
-  /// timeout. The service exists only for the duration of one login.
+  /// timeout. The service exists only for the duration of one login, and it
+  /// must bind the loopback interface only.
   func awaitCallback(
-    identity: CallbackTLSIdentityHandle,
     port: Int,
     timeoutSeconds: Double
   ) async throws -> OAuthCallbackRequest

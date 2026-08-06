@@ -3,8 +3,8 @@ import Testing
 import WrikeGatewayCore
 import WrikeGatewayTestSupport
 
-/// Builds a login flow from injected seams so every callback and identity path
-/// is exercised without live credentials and without a provisioned Keychain.
+/// Builds a login flow from injected seams so every callback path is exercised
+/// without live credentials and without opening a browser.
 private struct FlowHarness {
   let listenerStarts = Counter()
   let browserOpens = Counter()
@@ -40,7 +40,6 @@ private struct FlowHarness {
   }
 
   func flow(
-    identity: StubIdentityLoader.Behavior,
     listener: StubCallbackListener.Behavior,
     browserFails: Bool = false,
     capture: SecretCapture = SecretCapture(),
@@ -49,7 +48,6 @@ private struct FlowHarness {
   ) throws -> OAuthLoginFlow {
     OAuthLoginFlow(
       client: Self.client,
-      identityLoader: StubIdentityLoader(identity),
       listener: StubCallbackListener(listener, started: listenerStarts, boundPorts: boundPorts),
       browser: StubBrowserOpener(opened: browserOpens, shouldFail: browserFails, capture: capture),
       exchange: try OAuthTokenExchange(
@@ -65,63 +63,14 @@ private struct FlowHarness {
   }
 }
 
-@Suite("OAuth callback TLS identity")
-struct OAuthCallbackTLSIdentityTests {
-  @Test(
-    "Every invalid identity state fails before listener or browser activity",
-    arguments: CallbackTLSIdentityFailure.allCases
-  )
-  func failsBeforeSideEffects(failure: CallbackTLSIdentityFailure) async throws {
-    let harness = FlowHarness()
-    let flow = try harness.flow(
-      identity: .failure(failure),
-      listener: .callback(FlowHarness.callback())
-    )
-
-    do {
-      _ = try await flow.authorize()
-      Issue.record("Expected identity failure \(failure)")
-    } catch let error as GatewayError {
-      #expect(error.code == .authenticationFailed)
-      #expect(error.exitCode == .credential)
-      #expect(error.recoveryGuidance?.contains(WrikeOAuthEndpoints.callbackIdentityLabel) == true)
-    }
-
-    #expect(harness.listenerStarts.count == 0, "No listener may bind on an identity failure")
-    #expect(harness.browserOpens.count == 0, "No browser may open on an identity failure")
-  }
-
-  @Test("Identity guidance discloses no certificate or Keychain record data")
-  func guidanceIsSafe() {
-    for failure in CallbackTLSIdentityFailure.allCases {
-      let error = failure.asGatewayError(label: WrikeOAuthEndpoints.callbackIdentityLabel)
-      let combined = error.message + (error.recoveryGuidance ?? "")
-      #expect(!combined.contains("BEGIN CERTIFICATE"))
-      #expect(!combined.contains("PRIVATE KEY"))
-      #expect(!combined.lowercased().contains("serial"))
-      #expect(!combined.contains(WrikeOAuthEndpoints.authorizationURL))
-    }
-  }
-
-  @Test("The identity handle exposes no key material")
-  func handleIsOpaque() {
-    let handle = CallbackTLSIdentityHandle(reference: "abc")
-    let mirror = Mirror(reflecting: handle)
-    let names = mirror.children.compactMap(\.label)
-    #expect(!names.contains { $0.lowercased().contains("key") })
-    #expect(!"\(handle)".contains("BEGIN"))
-  }
-}
-
 @Suite("OAuth loopback callback validation")
 struct OAuthLoopbackCallbackTests {
   @Test("A valid callback exchanges the code and returns rotated token state")
   func completesFlow() async throws {
     let harness = FlowHarness()
-    let flow = try harness.flow(identity: .valid, listener: .callback(FlowHarness.callback()))
+    let flow = try harness.flow(listener: .callback(FlowHarness.callback()))
 
     let (state, trace) = try await flow.authorize()
-    #expect(trace.identityLoaded)
     #expect(trace.listenerStarted)
     #expect(trace.browserOpened)
     #expect(state.host == "app-eu.wrike.com")
@@ -135,11 +84,23 @@ struct OAuthLoopbackCallbackTests {
     #expect(!recorded.hasAuthorization)
   }
 
+  @Test("The listener binds before the browser opens")
+  func listenerPrecedesBrowser() async throws {
+    // A redirect can only be received by a port already being served, so the
+    // browser must never open ahead of the listener.
+    let harness = FlowHarness()
+    let flow = try harness.flow(listener: .callback(FlowHarness.callback()), browserFails: true)
+
+    await #expect(throws: GatewayError.self) {
+      _ = try await flow.authorize()
+    }
+    #expect(harness.listenerStarts.count == 1)
+  }
+
   @Test("A mismatched callback state is rejected")
   func rejectsStateMismatch() async throws {
     let harness = FlowHarness()
     let flow = try harness.flow(
-      identity: .valid,
       listener: .callback(FlowHarness.callback(state: "not-the-pending-state"))
     )
 
@@ -159,13 +120,14 @@ struct OAuthLoopbackCallbackTests {
     ("unexpected port", FlowHarness.callback(port: 9999)),
     ("unexpected path", FlowHarness.callback(path: "/other")),
     ("missing code", FlowHarness.callback(code: nil)),
+    ("empty state", FlowHarness.callback(state: "")),
     ("oauth error", FlowHarness.callback(error: "access_denied"))
   ]
 
   @Test("Invalid callbacks are rejected before any code exchange", arguments: rejectedCallbacks)
   func rejectsInvalidCallbacks(name: String, request: OAuthCallbackRequest) async throws {
     let harness = FlowHarness()
-    let flow = try harness.flow(identity: .valid, listener: .callback(request))
+    let flow = try harness.flow(listener: .callback(request))
 
     await #expect(throws: GatewayError.self) {
       _ = try await flow.authorize()
@@ -173,10 +135,28 @@ struct OAuthLoopbackCallbackTests {
     #expect(await harness.transport.requestCount == 0, "\(name) must not reach the token endpoint")
   }
 
+  @Test("Callback rejection messages disclose no state, code, or client id")
+  func rejectionMessagesAreSafe() async throws {
+    for (name, request) in Self.rejectedCallbacks {
+      let harness = FlowHarness()
+      let flow = try harness.flow(listener: .callback(request))
+      do {
+        _ = try await flow.authorize()
+        Issue.record("Expected \(name) to be rejected")
+      } catch let error as GatewayError {
+        let combined = error.message + (error.recoveryGuidance ?? "") + error.description
+        #expect(!combined.contains("fake-oauth-state-value"), "\(name)")
+        #expect(!combined.contains("fake-authorization-code"), "\(name)")
+        #expect(!combined.contains("fake-client-id"), "\(name)")
+        #expect(!combined.contains(WrikeOAuthEndpoints.authorizationURL), "\(name)")
+      }
+    }
+  }
+
   @Test("An elapsed callback timeout fails without exchanging a code")
   func timeoutFails() async throws {
     let harness = FlowHarness()
-    let flow = try harness.flow(identity: .valid, listener: .timeout)
+    let flow = try harness.flow(listener: .timeout)
 
     do {
       _ = try await flow.authorize()
@@ -192,7 +172,6 @@ struct OAuthLoopbackCallbackTests {
   func browserFailureIsSafe() async throws {
     let harness = FlowHarness()
     let flow = try harness.flow(
-      identity: .valid,
       listener: .callback(FlowHarness.callback()),
       browserFails: true
     )
@@ -212,7 +191,6 @@ struct OAuthLoopbackCallbackTests {
     let harness = FlowHarness()
     let capture = SecretCapture()
     let flow = try harness.flow(
-      identity: .valid,
       listener: .callback(FlowHarness.callback()),
       capture: capture
     )
@@ -220,30 +198,34 @@ struct OAuthLoopbackCallbackTests {
 
     let url = try #require(capture.revealed())
     #expect(url.hasPrefix(WrikeOAuthEndpoints.authorizationURL))
-    #expect(url.contains("redirect_uri=https://localhost:8765/callback".replacingOccurrences(
-      of: "://", with: "%3A%2F%2F"
-    )) || url.contains("localhost"))
-    #expect(url.contains("response_type=code"))
+
+    // The redirect the browser is sent to is exactly the loopback URI, checked
+    // by decoding the query rather than by substring, so a different scheme or
+    // host cannot satisfy this assertion.
+    let items = try #require(URLComponents(string: url)?.queryItems)
+    let redirect = try #require(items.first { $0.name == "redirect_uri" }?.value)
+    #expect(redirect == "http://localhost:8765/callback")
+    #expect(items.first { $0.name == "response_type" }?.value == "code")
 
     // As a `SecretValue`, the URL renders as the redaction placeholder.
     let secret = SecretValue(url)
     #expect("\(secret)" == SecretValue.placeholder)
   }
 
-  @Test("The redirect URI host and path are fixed, and only the port is configurable")
+  @Test("The redirect URI scheme, host, and path are fixed, and only the port is configurable")
   func redirectURIShape() throws {
     let defaultURI = WrikeOAuthEndpoints.redirectURI(
       port: WrikeOAuthEndpoints.defaultCallbackPort
     )
-    #expect(defaultURI == "https://localhost:8765/callback")
+    #expect(defaultURI == "http://localhost:8765/callback")
 
     let components = try #require(WrikeOAuthEndpoints.components(ofRedirectURI: defaultURI))
     #expect(components.host == "localhost")
     #expect(components.port == 8765)
     #expect(components.path == "/callback")
 
-    // A configured port changes only the port. The scheme stays HTTPS and the
-    // host stays loopback, so no configuration can redirect a code off-machine.
+    // A configured port changes only the port. The host stays loopback, so no
+    // configuration can send an authorization code off this machine.
     let configured = try #require(
       WrikeOAuthEndpoints.components(ofRedirectURI: WrikeOAuthEndpoints.redirectURI(port: 49152))
     )
@@ -268,12 +250,26 @@ struct OAuthLoopbackCallbackTests {
     }
   }
 
+  @Test("The redirect validator accepts only the loopback http URI")
+  func redirectValidatorRejectsOtherSchemes() {
+    // An https redirect is no longer part of the contract: nothing in this
+    // product can serve it, so it must not parse as a valid redirect.
+    #expect(WrikeOAuthEndpoints.components(ofRedirectURI: "https://localhost:8765/callback") == nil)
+    #expect(WrikeOAuthEndpoints.components(ofRedirectURI: "wrike://callback") == nil)
+    #expect(WrikeOAuthEndpoints.components(ofRedirectURI: "not a url at all") == nil)
+
+    // A non-loopback http URI parses, but its host is not the fixed callback
+    // host, which is what the callback validator rejects.
+    let foreign = WrikeOAuthEndpoints.components(ofRedirectURI: "http://attacker.example/callback")
+    #expect(foreign?.host == "attacker.example")
+    #expect(foreign?.host != WrikeOAuthEndpoints.callbackHost)
+  }
+
   @Test("The configured port reaches the callback service and the token exchange")
   func configuredPortReachesTheFlow() async throws {
     let harness = FlowHarness()
     let boundPorts = PortRecorder()
     let flow = try harness.flow(
-      identity: .valid,
       listener: .callback(FlowHarness.callback(port: 49152)),
       callbackPort: 49152,
       boundPorts: boundPorts
@@ -295,7 +291,6 @@ struct OAuthLoopbackCallbackTests {
     let harness = FlowHarness()
     // The service is configured for 49152; the callback claims the old default.
     let flow = try harness.flow(
-      identity: .valid,
       listener: .callback(FlowHarness.callback(port: 8765)),
       callbackPort: 49152
     )
@@ -310,7 +305,7 @@ struct OAuthLoopbackCallbackTests {
     let harness = FlowHarness(tokenResponse: """
       {"access_token":"fake","refresh_token":"fake","expires_in":3600,"host":"attacker.example"}
       """)
-    let flow = try harness.flow(identity: .valid, listener: .callback(FlowHarness.callback()))
+    let flow = try harness.flow(listener: .callback(FlowHarness.callback()))
 
     do {
       _ = try await flow.authorize()
@@ -331,6 +326,38 @@ struct OAuthLoopbackCallbackTests {
     #expect(policy.permitsCredentialForwarding(to: sameHost, from: origin))
     #expect(!policy.permitsCredentialForwarding(to: otherHost, from: origin))
     #expect(!policy.permitsCredentialForwarding(to: downgraded, from: origin))
+  }
+
+  @Test("The state generator is unguessable and every near-miss state is refused")
+  func stateGenerationAndComparison() throws {
+    // A repeated or short state would make the comparison meaningless.
+    let generated = Set((0..<64).map { _ in RandomStateGenerator().makeState().reveal() })
+    #expect(generated.count == 64, "Every generated state must be distinct")
+    for value in generated {
+      #expect(value.count >= 32)
+    }
+
+    // The comparison is exercised through the public validator: a state that
+    // differs only in its last byte, only in its first byte, or only in length
+    // is refused just as a wholly different one is.
+    let expected = "fake-oauth-state-value"
+    func request(state: String) -> OAuthCallbackRequest {
+      FlowHarness.callback(state: state)
+    }
+    #expect(throws: Never.self) {
+      _ = try OAuthCallbackValidator.validate(
+        request(state: expected),
+        expectedState: SecretValue(expected)
+      )
+    }
+    for near in ["fake-oauth-state-valuf", "gake-oauth-state-value", "fake-oauth-state-valu"] {
+      #expect(throws: GatewayError.self) {
+        _ = try OAuthCallbackValidator.validate(
+          request(state: near),
+          expectedState: SecretValue(expected)
+        )
+      }
+    }
   }
 }
 

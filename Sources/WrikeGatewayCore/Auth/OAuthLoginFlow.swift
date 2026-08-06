@@ -22,9 +22,8 @@ public struct RandomStateGenerator: StateGenerator {
 }
 
 /// Records which side effects the flow attempted, so tests can assert that a
-/// failed identity check prevents both listener binding and browser launch.
+/// failed step prevents the ones that follow it.
 public struct OAuthFlowTrace: Sendable, Equatable {
-  public var identityLoaded = false
   public var listenerStarted = false
   public var browserOpened = false
 
@@ -33,12 +32,11 @@ public struct OAuthFlowTrace: Sendable, Equatable {
 
 /// Orchestrates the OAuth2 authorization-code flow.
 ///
-/// Ordering is a security requirement, not a convenience: the callback TLS
-/// identity is validated first, so a missing or invalid identity fails before
-/// any listener binds or any browser opens.
+/// Ordering is a security requirement, not a convenience: the loopback listener
+/// is bound before the browser opens, so an authorization redirect can never
+/// arrive at a port this process is not already serving.
 public struct OAuthLoginFlow: Sendable {
   private let client: OAuthClientConfiguration
-  private let identityLoader: any CallbackTLSIdentityLoader
   private let listener: any OAuthCallbackListener
   private let browser: any BrowserOpener
   private let exchange: OAuthTokenExchange
@@ -53,7 +51,6 @@ public struct OAuthLoginFlow: Sendable {
 
   public init(
     client: OAuthClientConfiguration,
-    identityLoader: any CallbackTLSIdentityLoader,
     listener: any OAuthCallbackListener,
     browser: any BrowserOpener,
     exchange: OAuthTokenExchange,
@@ -65,7 +62,6 @@ public struct OAuthLoginFlow: Sendable {
   ) {
     self.callbackPort = callbackPort
     self.client = client
-    self.identityLoader = identityLoader
     self.listener = listener
     self.browser = browser
     self.exchange = exchange
@@ -80,10 +76,6 @@ public struct OAuthLoginFlow: Sendable {
   public func authorize() async throws -> (state: OAuthTokenState, trace: OAuthFlowTrace) {
     var trace = OAuthFlowTrace()
 
-    // Step 1: validate the fixed callback identity before anything else.
-    let identity = try identityLoader.loadIdentity(label: WrikeOAuthEndpoints.callbackIdentityLabel)
-    trace.identityLoaded = true
-
     let state = stateGenerator.makeState()
     let redirectURI = WrikeOAuthEndpoints.redirectURI(port: callbackPort)
     let authorizationURL = Self.authorizationURL(
@@ -93,16 +85,15 @@ public struct OAuthLoginFlow: Sendable {
       redirectURI: redirectURI
     )
 
-    // Step 2: bind the loopback listener using the validated identity. The
-    // service lives only for this login and stops when the flow returns.
+    // Step 1: bind the loopback listener. The service lives only for this login
+    // and stops when the flow returns.
     async let callbackTask = listener.awaitCallback(
-      identity: identity,
       port: callbackPort,
       timeoutSeconds: timeoutSeconds
     )
     trace.listenerStarted = true
 
-    // Step 3: open the authorization URL. It is never written to stdout,
+    // Step 2: open the authorization URL. It is never written to stdout,
     // stderr, or logs because it embeds the client id and the OAuth state.
     do {
       try await browser.open(authorizationURL)

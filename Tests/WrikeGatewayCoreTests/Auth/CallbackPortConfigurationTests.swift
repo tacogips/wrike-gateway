@@ -73,7 +73,7 @@ struct CallbackPortConfigurationTests {
   func onlyThePortVaries() throws {
     for port in [8765, 3000, 49152] {
       let uri = WrikeOAuthEndpoints.redirectURI(port: port)
-      #expect(uri.hasPrefix("https://localhost:"))
+      #expect(uri.hasPrefix("http://localhost:"))
       #expect(uri.hasSuffix("/callback"))
       let components = try #require(WrikeOAuthEndpoints.components(ofRedirectURI: uri))
       #expect(components.host == "localhost")
@@ -81,5 +81,4 @@ struct CallbackPortConfigurationTests {
       #expect(components.port == port)
     }
   }
-
 }

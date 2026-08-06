@@ -8,8 +8,9 @@ import Testing
 /// guard has to be a single atomic claim rather than a check followed by a set.
 ///
 /// `LockedBox` is deliberately internal: it is an implementation detail of the
-/// listener, not part of the SDK contract, so this is the one test file that
-/// imports the module with `@testable`.
+/// listener, not part of the SDK contract. This file and
+/// `LoopbackCallbackListenerTests` are the only ones that import the module
+/// with `@testable`, and both do so to reach listener internals.
 @Suite("Callback single-resume guard")
 struct CallbackResumeGuardTests {
   @Test("Exactly one caller wins the claim under contention")

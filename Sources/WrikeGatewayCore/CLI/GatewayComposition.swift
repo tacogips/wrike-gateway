@@ -30,18 +30,15 @@ public enum GatewayComposition {
       credentials: resolver,
       clock: clock
     )
-    let identityLoader = KeychainTLSIdentityLoader()
     // Resolved once, at composition, so a malformed port fails before a login
-    // starts rather than after the identity check has already run.
+    // starts rather than after a listener has already bound.
     let callbackPort = try WrikeOAuthEndpoints.resolveCallbackPort(from: environment)
     let authCommands = AuthCommands(
       resolver: resolver,
       environment: environment,
-      identityLoader: identityLoader,
       makeLoginFlow: { client, tier in
         OAuthLoginFlow(
           client: client,
-          identityLoader: identityLoader,
           listener: LoopbackCallbackListener(),
           browser: SystemBrowserOpener(),
           exchange: exchange,
