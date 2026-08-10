@@ -351,7 +351,7 @@ Wrike's application console and documented in the command guidance.
   than delivered.
 - Test fixtures use unmistakably fake values and assert that none appear in
   captured stdout or stderr.
-- `task build`, `task test`, and `swiftlint` pass after implementation.
+- `mise run build`, `mise run test`, and `swiftlint` pass after implementation.
 
 ## References
 

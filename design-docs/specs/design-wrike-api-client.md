@@ -246,7 +246,7 @@ request/response bodies.
   test.
 - Pagination, rate limits, refresh concurrency, attachment streaming, and
   redaction have dedicated tests.
-- `task build`, `task test`, and `swiftlint` pass after implementation.
+- `mise run build`, `mise run test`, and `swiftlint` pass after implementation.
 
 ## References
 

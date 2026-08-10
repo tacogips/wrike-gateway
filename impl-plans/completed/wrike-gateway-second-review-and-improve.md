@@ -161,15 +161,15 @@ backoffs. Before the fix the sequence stopped after the second 500.
 
 ### S4: The only documented live command ran the mutation lifecycle (low, fixed)
 
-`task test:live` filters on `LiveE2EScenarioTests`, which selects both the
+`mise run test:live` filters on `LiveE2EScenarioTests`, which selects both the
 read-and-boundary test and the mutation lifecycle that creates a real container
 in the account. Every document that told an operator how to run a live check
 pointed at that task, so a read-only live verification could not be requested
 without also running the mutation half.
 
-Fixed: `task test:live:read` runs
+Fixed: `mise run test:live:read` runs
 `swift test --filter 'LiveE2EScenarioTests/readsAndBoundaries'`, which was
-verified to select exactly one test. `task test:live` keeps its behavior and
+verified to select exactly one test. `mise run test:live` keeps its behavior and
 now says in its description and in a comment that it includes the mutation
 lifecycle. `README.md` and the live-verification record document both.
 
@@ -234,7 +234,7 @@ themselves.
 **Resolved for the read half after this pass closed.** The credentials turned
 out to be present in the kinko home-directory path scope; the earlier lookup
 failed only because kinko scopes secrets by path and the check ran under a
-different scope. `task test:live:read` was then executed against the real
+different scope. `mise run test:live:read` was then executed against the real
 account. Its first run failed exactly where this finding predicted the risk
 lay: the live-id capture chain took the folders list's first element, which on
 a real account is the Root pseudo-folder, and Wrike refuses that id on the
@@ -366,8 +366,8 @@ observe the ordering. No new evidence, so the deferral stands unchanged.
       responses update rather than replace the stored record (S2).
 - [x] `Sources/WrikeGatewayCore/Capabilities/CapabilityExecutor.swift`: the
       refreshed re-send does not spend a budgeted retry attempt (S3).
-- [x] `Taskfile.yml`: `task test:live:read`, and a mutation warning on
-      `task test:live` (S4).
+- [x] `Taskfile.yml`: `mise run test:live:read`, and a mutation warning on
+      `mise run test:live` (S4).
 - [x] `Tests/WrikeGatewayCoreTests/Auth/LoopbackCallbackListenerTests.swift`:
       three tests plus a chunked real-socket probe (S1).
 - [x] `Tests/WrikeGatewayCoreTests/Auth/OAuthLoginFlowTests.swift`: four tests
@@ -392,7 +392,7 @@ observe the ordering. No new evidence, so the deferral stands unchanged.
 - [x] Every accepted fix has a covering test, except S4 and S5, which are a
       task definition and a document; the filter granularity S4 depends on is
       proved by a control run instead.
-- [x] `task build`, `task test`, and `swiftlint` pass.
+- [x] `mise run build`, `mise run test`, and `swiftlint` pass.
 - [x] Reader, writer, and admin schema output is byte-identical to the
       pre-change snapshot; the writer schema contains no delete mutation.
 - [x] No GraphQL field name, error code, exit code, or environment variable name
@@ -403,7 +403,7 @@ observe the ordering. No new evidence, so the deferral stands unchanged.
 
 - 2026-08-06: Second review-and-improve pass completed.
 
-  **Baseline.** On `1934c87`: `task build` clean, `task test` 313 tests in 44
+  **Baseline.** On `1934c87`: `mise run build` clean, `mise run test` 313 tests in 44
   suites passed, `swiftlint` 0 violations in 99 files. Schema output captured
   for all three executables as the pre-change contract snapshot;
   `grep -cE '^\s+delete[A-Z]'` reported 0 delete mutations in the writer schema
@@ -422,7 +422,7 @@ observe the ordering. No new evidence, so the deferral stands unchanged.
   create, update, or delete was attempted. The read-only test's isolation and
   the suite's clean skip were both demonstrated locally and are recorded in S6.
 
-  **Verification.** `task build` clean. `task test`: 321 tests in 44 suites
+  **Verification.** `mise run build` clean. `mise run test`: 321 tests in 44 suites
   passed, up from 313; the 8 added tests are the covering tests for S1, S2, and
   S3. `swiftlint`: 0 violations in 99 files. Schema comparison:
   `swift run wrike-gateway-reader|writer|admin graphql schema` diffed against
@@ -435,7 +435,7 @@ observe the ordering. No new evidence, so the deferral stands unchanged.
   produced a wrong answer now produce a right one under existing codes: a
   split-segment callback delivers the whole authorization code instead of a
   truncated one, and a refresh response that omits an optional field keeps the
-  stored value instead of clearing it or failing. `task test:live:read` is a new
+  stored value instead of clearing it or failing. `mise run test:live:read` is a new
   task, not a new flag or variable; no production binary gained an option.
 
   **Residual risks, recorded rather than closed.** The live E2E runner is still

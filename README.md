@@ -47,17 +47,17 @@ proves this by inspecting the linked symbols of the built executables.
 ## Development
 
 ```bash
-nix develop
-task build
-task test
-task lint
+mise install
+mise run build
+mise run test
+mise run lint
 swift run wrike-gateway-reader --help
 swift run wrike-gateway-reader graphql schema
 ```
 
 ### End-to-end scenarios
 
-The normal `task test` suite includes the replay E2E runner. It executes the
+The normal `mise run test` suite includes the replay E2E runner. It executes the
 shared scenario catalog through a loopback HTTP server with sanitized canned
 responses, requires no Wrike credential, and never changes a Wrike account.
 The live E2E suite is disabled unless `WRIKE_GATEWAY_LIVE_E2E=1` and both
@@ -69,7 +69,7 @@ nothing:
 ```bash
 kinko exec --force \
   --env WRIKE_GATEWAY_ACCESS_TOKEN,WRIKE_GATEWAY_API_BASE_URL -- \
-  task test:live:read
+  mise run test:live:read
 ```
 
 Run the full live catalog, including the mutation lifecycle:
@@ -77,7 +77,7 @@ Run the full live catalog, including the mutation lifecycle:
 ```bash
 kinko exec --force \
   --env WRIKE_GATEWAY_ACCESS_TOKEN,WRIKE_GATEWAY_API_BASE_URL -- \
-  task test:live
+  mise run test:live
 ```
 
 The full live suite is destructive by design but bounded: it creates one dedicated
@@ -186,19 +186,19 @@ required. There is no redirect-URI, host, or path override.
 Build local formula archives:
 
 ```bash
-task build:homebrew -- darwin-arm64 darwin-x64
+mise run build:homebrew -- darwin-arm64 darwin-x64
 ```
 
 Render a formula after both platform archives exist:
 
 ```bash
-task homebrew:formula -- 0.1.0
+mise run homebrew:formula -- 0.1.0
 ```
 
 Render directly into the default sibling tap checkout:
 
 ```bash
-task homebrew:tap-formula -- 0.1.0
+mise run homebrew:tap-formula -- 0.1.0
 ```
 
 Install from the tap after the formula is published:
@@ -216,27 +216,27 @@ Apple signing credentials must stay local and must not be committed.
 Check the build plan:
 
 ```bash
-task build:homebrew-cask -- --dry-run darwin-arm64 darwin-x64
+mise run build:homebrew-cask -- --dry-run darwin-arm64 darwin-x64
 ```
 
 Build with local signing credentials:
 
 ```bash
 kinko exec --env APPLE_SIGNING_IDENTITY,APPLE_ID,APPLE_PASSWORD,APPLE_TEAM_ID -- \
-  task build:homebrew-cask -- darwin-arm64 darwin-x64
+  mise run build:homebrew-cask -- darwin-arm64 darwin-x64
 ```
 
 Render a Cask:
 
 ```bash
-task homebrew:cask -- 0.1.0
+mise run homebrew:cask -- 0.1.0
 ```
 
 For a tagged release, build, upload, and render the tap Cask:
 
 ```bash
 kinko exec --env APPLE_SIGNING_IDENTITY,APPLE_ID,APPLE_PASSWORD,APPLE_TEAM_ID -- \
-  task release:homebrew-cask-local -- v0.1.0
+  mise run release:homebrew-cask-local -- v0.1.0
 ```
 
 See `packaging/homebrew/README.md` and `.agents/skills/` for release workflows.

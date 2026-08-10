@@ -93,7 +93,7 @@ names.
 
 ## Pagination and Attachment Download
 
-The first task page returned a non-empty opaque `nextPageToken`. The exact
+The first mise run page returned a non-empty opaque `nextPageToken`. The exact
 follow-up document was:
 
 ```graphql
@@ -299,7 +299,7 @@ created relationship before cleanup, and accepts only explicit
 Run the default replay suite:
 
 ```bash
-task test
+mise run test
 ```
 
 Run only the read and boundary half, which creates nothing:
@@ -307,7 +307,7 @@ Run only the read and boundary half, which creates nothing:
 ```bash
 kinko exec --force \
   --env WRIKE_GATEWAY_ACCESS_TOKEN,WRIKE_GATEWAY_API_BASE_URL -- \
-  task test:live:read
+  mise run test:live:read
 ```
 
 Run the full live suite, including the mutation lifecycle that creates and then
@@ -316,10 +316,10 @@ removes a real container:
 ```bash
 kinko exec --force \
   --env WRIKE_GATEWAY_ACCESS_TOKEN,WRIKE_GATEWAY_API_BASE_URL -- \
-  task test:live
+  mise run test:live
 ```
 
-**Reconciliation note.** `task test:live:read` did not exist when this document
+**Reconciliation note.** `mise run test:live:read` did not exist when this document
 was written; the only documented live command ran both tests, so a read-only
 check could not be requested without also running the mutation lifecycle. The
 second pass added the read-only task and verified that
@@ -336,7 +336,7 @@ the suite skipped cleanly and created nothing.
 - Before: 307 tests in 43 suites passed; SwiftLint clean over 100 Swift files.
 - After: 315 tests in 45 suites passed; SwiftLint clean with 0 violations
   across 101 Swift files.
-- Required final gates: `task build`, `task test`, and `swiftlint` all passed.
+- Required final gates: `mise run build`, `mise run test`, and `swiftlint` all passed.
 
 **Reconciliation note.** The 315/45 over 101 files recorded above is stale. It
 predates `8a45649`, which removed the Keychain-backed callback identity and the

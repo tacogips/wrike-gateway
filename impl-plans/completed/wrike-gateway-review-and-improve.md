@@ -226,7 +226,7 @@ the error's `recovery` extension, and all three schemas stay byte-identical.
 - [x] Each of the four recorded residual risks has an explicit decision: R1, R2,
       R3, and R4 above.
 - [x] Every accepted fix has a covering test.
-- [x] `task build`, `task test`, `swift test`, and `swiftlint` pass.
+- [x] `mise run build`, `mise run test`, `swift test`, and `swiftlint` pass.
 - [x] Reader, writer, and admin schema output is byte-identical to the
       pre-change snapshot; the writer schema contains no delete mutation.
 - [x] No error code, exit code, or environment variable name changed.
@@ -236,7 +236,7 @@ the error's `recovery` extension, and all three schemas stay byte-identical.
 
 - 2026-08-05: Review-and-improve pass completed.
 
-  **Baseline.** `task build`, `task test` (269 tests in 40 suites passed),
+  **Baseline.** `mise run build`, `mise run test` (269 tests in 40 suites passed),
   `swiftlint` (0 violations in 95 files) on `d7e1a26`. Schema output captured for
   all three executables as the pre-change contract snapshot.
 
@@ -244,8 +244,8 @@ the error's `recovery` extension, and all three schemas stay byte-identical.
   with no change needed (R8, R9, R10), 1 deferred (R11), 2 rejected (R12, R13).
   Two were rated high severity, both silent misreports of a download outcome.
 
-  **Verification.** `task build` and `swift build --build-tests` clean with 0
-  warnings, down from 22. `task test` and `swift test`: 281 tests in 40 suites
+  **Verification.** `mise run build` and `swift build --build-tests` clean with 0
+  warnings, down from 22. `mise run test` and `swift test`: 281 tests in 40 suites
   passed, up from 269; the 12 added tests are the covering tests for R1, R2, R3,
   R5, and R6. `swiftlint`: 0 violations in 95 files. Schema comparison:
   `swift run wrike-gateway-reader|writer|admin graphql schema` diffed against the

@@ -636,8 +636,8 @@ and documentation status after every tier is present.
 
 **Verification Commands**:
 
-- `task build`
-- `task test`
+- `mise run build`
+- `mise run test`
 - `swift test`
 - `swiftlint`
 - `swift run wrike-gateway-reader --help`
@@ -657,7 +657,7 @@ and documentation status after every tier is present.
 - [x] Reader cannot link or dispatch writes/deletes; writer cannot link or
       dispatch deletes.
 - [x] Redaction and no-production-test-hook assertions pass.
-- [x] `task build`, `task test`, and `swiftlint` pass in one clean verification
+- [x] `mise run build`, `mise run test`, and `swiftlint` pass in one clean verification
       session.
 
 ### TASK-010: Refresh Documentation and Close the Active Plan
@@ -733,8 +733,8 @@ TASK-001
 
 ## Global Verification
 
-- `task build`
-- `task test`
+- `mise run build`
+- `mise run test`
 - `swift test`
 - `swiftlint`
 - `git diff --check -- design-docs impl-plans Package.swift Sources Tests`
@@ -793,7 +793,7 @@ TASK-001
 - [x] `deleteProject`, `TRANSPORT_FAILED`, the excluded initial `users`
       collection, canonical environment variables, products, executables, and
       capability tiers remain consistent across code, tests, and docs.
-- [x] `task build`, `task test`, `swift test`, and `swiftlint` pass.
+- [x] `mise run build`, `mise run test`, `swift test`, and `swiftlint` pass.
 - [x] No unrelated release, packaging, source, or staged `flake.lock` change is
       included.
 - [x] Every task has a dated progress entry, checked completion criteria, and
@@ -883,7 +883,7 @@ condition.
   execution path for both the typed SDK and GraphQL.
 
   **TASK-009 (verification).** Commands run, all passing:
-  `task build`; `task test`; `swift test` (186 tests, 30 suites);
+  `mise run build`; `mise run test`; `swift test` (186 tests, 30 suites);
   `swiftlint` (0 violations in 85 files);
   `swift run wrike-gateway-{reader,writer,admin} --help`;
   `swift run wrike-gateway-{reader,writer,admin} graphql schema`;
@@ -996,8 +996,8 @@ condition.
   `Tests/WrikeGatewayTestSupport/InjectedSeams.swift`; `AGENTS.md`,
   `README.md`, `design-docs/specs/design-authentication.md`, and this plan.
 
-  **Verification.** `swift build` pass; `task build` pass; `swift test` and
-  `task test` pass with 209 tests in 34 suites; `swiftlint` reports 0 violations
+  **Verification.** `swift build` pass; `mise run build` pass; `swift test` and
+  `mise run test` pass with 209 tests in 34 suites; `swiftlint` reports 0 violations
   in 87 files. The opt-in
   `WRIKE_GATEWAY_KINKO_INTEGRATION=1 swift test --filter storeCommandsParse`
   replays the store's real argv and stdin through the installed kinko and
@@ -1059,8 +1059,8 @@ condition.
   `design-docs/specs/design-authentication.md` records the markers per
   subcommand, and the previous progress-log entry is corrected in place.
 
-  **Verification.** `swift build` pass; `task build` pass; `swift test` and
-  `task test` pass with 213 tests in 34 suites; `swiftlint` reports 0 violations
+  **Verification.** `swift build` pass; `mise run build` pass; `swift test` and
+  `mise run test` pass with 213 tests in 34 suites; `swiftlint` reports 0 violations
   in 87 files. `WRIKE_GATEWAY_KINKO_INTEGRATION=1 swift test --filter
   storeCommandsParse` passes against the installed kinko 0.1.8 and now fails if
   the key positional or the stdin record body is dropped. `git status --short`
@@ -1148,8 +1148,8 @@ condition.
   narrowed Status block. The auth global completion criterion is checked, with
   the live Wrike authorization exchange named as what remains.
 
-  **Verification.** `swift build` pass; `task build` pass; `swift test` and
-  `task test` pass with 220 tests in 36 suites; `swiftlint` reports 0
+  **Verification.** `swift build` pass; `mise run build` pass; `swift test` and
+  `mise run test` pass with 220 tests in 36 suites; `swiftlint` reports 0
   violations in 89 files. `WRIKE_GATEWAY_KINKO_INTEGRATION=1 swift test
   --filter storeCommandsParse` passes against the installed kinko 0.1.8.
   `WRIKE_GATEWAY_KINKO_ROUNDTRIP=1 swift test --filter roundTrip` passes
@@ -1240,8 +1240,8 @@ list may use `try?` on a store call, so the next reviewer checks a list instead
 of re-deriving the property. The Redaction section now separates "safe report"
 from "report that always succeeds" and names the two cases reported as errors.
 
-**Verification.** `swift build` pass; `task build` pass; `swift test` and
-`task test` pass with 222 tests in 36 suites (up from 220); `swiftlint` reports
+**Verification.** `swift build` pass; `mise run build` pass; `swift test` and
+`mise run test` pass with 222 tests in 36 suites (up from 220); `swiftlint` reports
 0 violations in 89 files. `git status --short` shows the pre-existing staged
 `flake.lock` unmodified and untouched.
 
@@ -1365,8 +1365,8 @@ size, and the absence of bytes from the envelope. Three loopback tests run the
 real `URLSession` transport against the loopback server for a streaming
 download, a refused download, and a preview size on the wire.
 
-**Verification, all passing on 2026-08-05.** `swift build`; `task build`;
-`swift test` and `task test`, 269 tests in 40 suites (up from 222);
+**Verification, all passing on 2026-08-05.** `swift build`; `mise run build`;
+`swift test` and `mise run test`, 269 tests in 40 suites (up from 222);
 `swiftlint`, 0 violations in 94 files;
 `git diff --check -- design-docs impl-plans Package.swift Sources Tests`;
 `LC_ALL=C rg -n '[^ -~]' design-docs impl-plans`, no matches; `git status
