@@ -4,6 +4,7 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 artifact_name="wrike-gateway"
+product="wrike-gateway"
 
 usage() {
   cat <<EOF
@@ -55,7 +56,7 @@ main() {
   version="$1"
   output="${2:-$repo_root/Formula/$artifact_name.rb}"
   release_dir="${RELEASE_DIR:-$repo_root/dist/homebrew}"
-  release_base_url="${RELEASE_BASE_URL:-https://github.com/tacogips/wrike-gateway/releases/download/v$version}"
+  release_base_url="${RELEASE_BASE_URL:-https://github.com/user/repo/releases/download/v$version}"
 
   local darwin_arm64_sha darwin_x64_sha
   darwin_arm64_sha="$(sha_for_target "$version" darwin-arm64 "$release_dir")"
@@ -63,9 +64,9 @@ main() {
 
   mkdir -p "$(dirname "$output")"
   cat > "$output" <<EOF
-class WrikeGateway < Formula
-  desc "Capability-scoped Wrike API v4 CLI with a project-owned GraphQL contract"
-  homepage "https://github.com/tacogips/wrike-gateway"
+class App < Formula
+  desc "A Swift command line tool"
+  homepage "https://github.com/user/repo"
   version "$version"
   license "MIT"
 
@@ -85,13 +86,11 @@ class WrikeGateway < Formula
   end
 
   def install
-    bin.install "bin/wrike-gateway-reader"
-    bin.install "bin/wrike-gateway-writer"
-    bin.install "bin/wrike-gateway-admin"
+    bin.install "bin/$product"
   end
 
   test do
-    assert_match "$version", shell_output("#{bin}/wrike-gateway-reader --version")
+    assert_match "$version", shell_output("#{bin}/$product --version")
   end
 end
 EOF
