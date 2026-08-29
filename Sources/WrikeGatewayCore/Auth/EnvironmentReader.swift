@@ -33,8 +33,9 @@ public struct ProcessEnvironmentReader: EnvironmentReader {
   }
 }
 
-/// A fixed environment for tests. Secret-shaped values are stored as plain
-/// strings here because fixtures use unmistakably fake values.
+/// A fixed environment, used by tests and by hosts that embed this package as
+/// a library and supply one call's credentials directly. Secret-shaped values
+/// are stored as plain strings; fixtures use unmistakably fake values.
 public struct StaticEnvironmentReader: EnvironmentReader {
   private let values: [String: String]
 

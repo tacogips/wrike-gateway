@@ -3,18 +3,26 @@ import Foundation
 /// Builds the production object graph for one executable role.
 ///
 /// The composition root exposes no mock transport, fixture path, alternate
-/// host, or test-mode selector. Tests build their own graph by calling the
-/// individual initializers directly; nothing in this type reads a flag or an
-/// undocumented environment variable to change behavior.
+/// host, or test-mode selector. Where credentials are read from is injectable
+/// so a library host can scope them to one call, but the transport, the
+/// capability registry, and the credential store are fixed. Tests build their
+/// own graph by calling the individual initializers directly; nothing in this
+/// type reads a flag or an undocumented environment variable to change
+/// behavior.
 public enum GatewayComposition {
+  /// - Parameter environment: where credentials and endpoint overrides are
+  ///   read from. Defaults to the process environment. A host that embeds this
+  ///   package as a library (rather than running the executable) passes a
+  ///   caller-scoped reader so one call's credentials never have to be written
+  ///   into the host process's own environment.
   public static func makeCommandFrame(
     role: RoleDescriptor,
-    definitions: [CapabilityDefinition]
+    definitions: [CapabilityDefinition],
+    environment: any EnvironmentReader = ProcessEnvironmentReader()
   ) throws -> CommandFrame {
     let registry = try CapabilityRegistry(tier: role.tier, definitions: definitions)
     let planner = CapabilityPlanner(registry: registry)
     let transport = URLSessionWrikeTransport()
-    let environment = ProcessEnvironmentReader()
     let store = KinkoCredentialStore()
     let clock = SystemClock()
     // The token endpoint is on the login host with an `/oauth2` path, which the

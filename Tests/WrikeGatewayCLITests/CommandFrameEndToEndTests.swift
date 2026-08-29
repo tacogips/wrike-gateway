@@ -540,3 +540,32 @@ struct TypedSDKSurfaceTests {
     #expect(await transport.requestCount == 0)
   }
 }
+
+@Suite("Composition root credential environment")
+struct GatewayCompositionEnvironmentTests {
+  /// A host that links this package as a library supplies one call's
+  /// environment directly; the composition root must consult that reader and
+  /// not the host process's own environment.
+  @Test("makeCommandFrame reads the injected environment, not the process environment")
+  func compositionUsesTheInjectedEnvironment() throws {
+    #expect(ProcessInfo.processInfo.environment[GatewayEnvironmentKey.oauthCallbackPort.rawValue] == nil)
+
+    // A value only the injected reader carries has to reach the resolver, so
+    // an invalid one must fail composition.
+    #expect(throws: GatewayError.self) {
+      _ = try GatewayComposition.makeCommandFrame(
+        role: .reader,
+        definitions: ReadCapabilities.all,
+        environment: StaticEnvironmentReader([.oauthCallbackPort: "not-a-port"])
+      )
+    }
+
+    // And a valid one must compose, proving the failure above came from the
+    // injected reader rather than an unrelated error.
+    _ = try GatewayComposition.makeCommandFrame(
+      role: .reader,
+      definitions: ReadCapabilities.all,
+      environment: StaticEnvironmentReader([.oauthCallbackPort: "8123"])
+    )
+  }
+}
