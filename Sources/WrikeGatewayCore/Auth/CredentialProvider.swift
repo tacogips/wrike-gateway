@@ -263,8 +263,12 @@ public actor CredentialResolver: CredentialProvider {
         }
         return rotated
       }
-      let destination = CredentialRecordKey(clientID: client.clientID, host: rotated.host)
-      await refreshCoordinator.forgetStates(for: [key, destination])
+      // A failed host migration records an undurable barrier for every key
+      // that could still surface its invalidated predecessor. Once any later
+      // refresh is safely durable, retire all aliases for this OAuth client;
+      // clearing only the active key can leave the source-host barrier to
+      // shadow the newer durable destination record in a fresh resolver.
+      await refreshCoordinator.forgetStates(for: recordKeys(for: client.clientID))
       cachedState = rotated
       return rotated
     } catch let failure as RefreshPersistenceFailure {
@@ -290,6 +294,12 @@ public actor CredentialResolver: CredentialProvider {
       grantedScopes: state.grantedScopes,
       expiresAt: state.expiresAt
     )
+  }
+
+  private func recordKeys(for clientID: SecretValue) -> [CredentialRecordKey] {
+    WrikeHostPolicy.approvedAPIHosts.map {
+      CredentialRecordKey(clientID: clientID, host: $0)
+    }
   }
 
   /// Builds the safe `auth status` report without reading token values into
@@ -340,10 +350,7 @@ public actor CredentialResolver: CredentialProvider {
       let key = CredentialRecordKey(clientID: client.clientID, host: host)
       if try await store.delete(key) { removed = true }
     }
-    let keys = WrikeHostPolicy.approvedAPIHosts.map {
-      CredentialRecordKey(clientID: client.clientID, host: $0)
-    }
-    await refreshCoordinator.forgetStates(for: keys)
+    await refreshCoordinator.forgetStates(for: recordKeys(for: client.clientID))
     cachedState = nil
     return removed
   }
@@ -352,10 +359,7 @@ public actor CredentialResolver: CredentialProvider {
   public func commit(_ state: OAuthTokenState) async throws {
     let key = CredentialRecordKey(clientID: state.clientID, host: state.host)
     try await store.replace(state, for: key)
-    let keys = WrikeHostPolicy.approvedAPIHosts.map {
-      CredentialRecordKey(clientID: state.clientID, host: $0)
-    }
-    await refreshCoordinator.forgetStates(for: keys)
+    await refreshCoordinator.forgetStates(for: recordKeys(for: state.clientID))
     cachedState = state
   }
 }

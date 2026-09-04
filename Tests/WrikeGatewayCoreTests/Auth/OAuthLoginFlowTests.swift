@@ -566,6 +566,68 @@ struct OAuthRefreshTests {
     #expect(await transport.requestCount == 3)
   }
 
+  @Test("A recovered host migration retires every undurable source alias")
+  func recoveredMigratedStateDoesNotShadowDurableDestination() async throws {
+    let clock = TestClock()
+    let (state, key) = expiredState(clock: clock)
+    let store = InMemoryCredentialStore(seed: [key: state])
+    await store.failNextWrite()
+    let transport = RecordingTransport(
+      outcomes: [
+        .response(WrikeResponse(statusCode: 200, body: Data("""
+          {"access_token":"fake-undurable-access","refresh_token":"fake-undurable-refresh",\
+          "expires_in":7200,"host":"app-eu.wrike.com"}
+          """.utf8))),
+        .response(WrikeResponse(statusCode: 200, body: Data("""
+          {"access_token":"fake-recovered-access","refresh_token":"fake-recovered-refresh",\
+          "expires_in":3600,"host":"app-eu.wrike.com"}
+          """.utf8)))
+      ],
+      repeatsFinalOutcome: false
+    )
+    let coordinator = OAuthRefreshCoordinator()
+    let failingResolver = try makeResolver(
+      transport: transport,
+      store: store,
+      clock: clock,
+      refreshCoordinator: coordinator
+    )
+
+    await #expect(throws: GatewayError.self) {
+      _ = try await failingResolver.credential()
+    }
+
+    let recoveryResolver = try makeResolver(
+      transport: transport,
+      store: store,
+      clock: clock,
+      refreshCoordinator: coordinator
+    )
+    let stale = ResolvedCredential(
+      mode: .oauth2,
+      token: SecretValue("fake-undurable-access"),
+      baseURL: try #require(URL(string: "https://app-eu.wrike.com/api/v4")),
+      grantedScopes: ["wsReadOnly"],
+      expiresAt: clock.now.addingTimeInterval(7_200)
+    )
+    let recovered = try #require(try await recoveryResolver.refreshedCredential(after: stale))
+    #expect(recovered.token == SecretValue("fake-recovered-access"))
+
+    // The old www alias has a later expiry than the recovered EU record. A
+    // new resolver must nevertheless select the durable replacement rather
+    // than the process-local state whose refresh token was invalidated.
+    let freshResolver = try makeResolver(
+      transport: transport,
+      store: store,
+      clock: clock,
+      refreshCoordinator: coordinator
+    )
+    let fresh = try await freshResolver.credential()
+    #expect(fresh.token == SecretValue("fake-recovered-access"))
+    #expect(fresh.baseURL.host == "app-eu.wrike.com")
+    #expect(await transport.requestCount == 2)
+  }
+
   @Test("A rejected refresh returns AUTHENTICATION_FAILED without a retry loop")
   func rejectedRefresh() async throws {
     let clock = TestClock()
