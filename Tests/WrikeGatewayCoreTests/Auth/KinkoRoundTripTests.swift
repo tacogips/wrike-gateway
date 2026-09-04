@@ -5,7 +5,7 @@ import WrikeGatewayCore
 /// Runs the store's production argv unchanged and appends only the two flags
 /// that redirect kinko's state, so the round trip below reads and writes a
 /// disposable vault instead of the operator's.
-private struct KinkoDirectoryRunner: ProcessRunner {
+private struct KinkoDirectoryRunner: ConfigurableProcessRunner {
   let isolation: [String]
   private let inner = SystemProcessRunner()
 
@@ -14,7 +14,26 @@ private struct KinkoDirectoryRunner: ProcessRunner {
   }
 
   func run(executable: String, arguments: [String], standardInput: Data?) async throws -> ProcessResult {
-    try await inner.run(executable: executable, arguments: arguments + isolation, standardInput: standardInput)
+    try await run(
+      executable: executable,
+      arguments: arguments,
+      standardInput: standardInput,
+      options: .inherited
+    )
+  }
+
+  func run(
+    executable: String,
+    arguments: [String],
+    standardInput: Data?,
+    options: ProcessExecutionOptions
+  ) async throws -> ProcessResult {
+    try await inner.run(
+      executable: executable,
+      arguments: arguments + isolation,
+      standardInput: standardInput,
+      options: options
+    )
   }
 }
 

@@ -172,6 +172,8 @@ struct KinkoCredentialStoreContractTests {
       "get", Self.key.storageName, "--reveal", "--force",
       "--path", Self.scopePath, "--profile", Self.profile
     ])
+    #expect(invocation.options.environment == ["HOME": Self.scopePath, "LC_ALL": "C"])
+    #expect(invocation.options.timeoutSeconds == KinkoCredentialStore.defaultProcessTimeoutSeconds)
   }
 
   @Test("replace writes the record on stdin and never on argv")
@@ -465,10 +467,10 @@ struct KinkoCredentialStoreContractTests {
 
 @Suite("Kinko executable resolution")
 struct KinkoExecutableResolverTests {
-  @Test("PATH is searched before the packaged prefixes")
-  func prefersPath() {
+  @Test("Only explicit trusted absolute paths are considered")
+  func usesExplicitTrustedPaths() {
     let resolver = KinkoExecutableResolver(
-      searchPath: "/nix/store/abc-kinko/bin:/usr/bin",
+      trustedPaths: ["/nix/store/abc-kinko/bin/kinko", "/opt/homebrew/bin/kinko"],
       isExecutable: { $0 == "/nix/store/abc-kinko/bin/kinko" || $0 == "/opt/homebrew/bin/kinko" }
     )
     #expect(resolver.resolve() == "/nix/store/abc-kinko/bin/kinko")
@@ -479,7 +481,7 @@ struct KinkoExecutableResolverTests {
     "/usr/local/bin/kinko"
   ])
   func fallsBackToHomebrewPrefixes(installed: String) {
-    let resolver = KinkoExecutableResolver(searchPath: nil, isExecutable: { $0 == installed })
+    let resolver = KinkoExecutableResolver(isExecutable: { $0 == installed })
     #expect(resolver.resolve() == installed)
   }
 
@@ -487,7 +489,7 @@ struct KinkoExecutableResolverTests {
   func missingExecutable() async throws {
     let store = KinkoCredentialStore(
       runner: StubProcessRunner(results: []),
-      resolver: KinkoExecutableResolver(searchPath: "/nowhere", isExecutable: { _ in false })
+      resolver: KinkoExecutableResolver(trustedPaths: [], isExecutable: { _ in false })
     )
     do {
       _ = try await store.load(CredentialRecordKey(clientID: SecretValue("c"), host: "www.wrike.com"))
@@ -497,6 +499,16 @@ struct KinkoExecutableResolverTests {
       #expect(error.recoveryGuidance?.contains("/opt/homebrew/bin/kinko") == true)
       #expect(error.recoveryGuidance?.contains("/usr/local/bin/kinko") == true)
     }
+  }
+
+  @Test("A relative executable path fails closed before a credential command runs")
+  func relativeExecutablePathIsRejected() async throws {
+    let runner = StubProcessRunner(results: [])
+    let store = KinkoCredentialStore(runner: runner, executablePath: "kinko")
+    await #expect(throws: GatewayError.self) {
+      _ = try await store.load(CredentialRecordKey(clientID: SecretValue("c"), host: "www.wrike.com"))
+    }
+    #expect(await runner.invocations.isEmpty)
   }
 
   @Test("The default store pins the home directory, not the working directory")

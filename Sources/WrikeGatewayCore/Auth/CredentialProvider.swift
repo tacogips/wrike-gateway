@@ -12,6 +12,10 @@ public protocol CredentialProvider: Sendable {
 /// resolvers that address the same durable credential record.
 public actor OAuthRefreshCoordinator {
   private var inFlight: [CredentialRecordKey: Task<OAuthTokenState, any Error>] = [:]
+  /// A refresh token can be rotated successfully before its durable store
+  /// rejects the replacement. Retain that state for the current process so a
+  /// fresh facade runtime never resubmits the invalidated predecessor.
+  private var undurableStates: [CredentialRecordKey: OAuthTokenState] = [:]
 
   public init() {}
 
@@ -27,6 +31,29 @@ public actor OAuthRefreshCoordinator {
     defer { inFlight[key] = nil }
     return try await task.value
   }
+
+  func undurableState(for key: CredentialRecordKey) -> OAuthTokenState? {
+    undurableStates[key]
+  }
+
+  func rememberUndurable(_ state: OAuthTokenState, for keys: [CredentialRecordKey]) {
+    for key in keys {
+      undurableStates[key] = state
+    }
+  }
+
+  func forgetStates(for keys: [CredentialRecordKey]) {
+    for key in keys {
+      undurableStates.removeValue(forKey: key)
+    }
+  }
+}
+
+/// A deliberately private transport for a newly issued secret state. It is
+/// never rendered; `CredentialResolver` immediately records the safe retry
+/// barrier and converts it to a redacted authentication error.
+private struct RefreshPersistenceFailure: Error, Sendable {
+  let state: OAuthTokenState
 }
 
 /// Resolves the process credential and owns single-flight refresh.
@@ -122,14 +149,24 @@ public actor CredentialResolver: CredentialProvider {
   private func loadState() async throws -> OAuthTokenState? {
     if let cachedState { return cachedState }
     guard let client = OAuthClientConfiguration.resolve(from: environment) else { return nil }
+    var candidates: [OAuthTokenState] = []
     for host in WrikeHostPolicy.approvedAPIHosts {
       let key = CredentialRecordKey(clientID: client.clientID, host: host)
-      if let state = try await store.load(key) {
-        cachedState = state
-        return state
+      if let state = await refreshCoordinator.undurableState(for: key) {
+        candidates.append(state)
+      } else if let state = try await store.load(key) {
+        candidates.append(state)
       }
     }
-    return nil
+    // Host migration may briefly leave an old and a replacement key. Choose
+    // the newest credential deterministically rather than relying on host
+    // enumeration order, which could otherwise resubmit an invalidated token.
+    let state = candidates.max { lhs, rhs in
+      if lhs.expiresAt == rhs.expiresAt { return lhs.host < rhs.host }
+      return lhs.expiresAt < rhs.expiresAt
+    }
+    cachedState = state
+    return state
   }
 
   /// Single-flight refresh. Concurrent callers await one committed result.
@@ -150,23 +187,43 @@ public actor CredentialResolver: CredentialProvider {
     let store = self.store
     let clock = self.clock
     let key = CredentialRecordKey(clientID: client.clientID, host: state.host)
-    let rotated = try await refreshCoordinator.refresh(key: key) {
-      if let persisted = try await store.load(key),
-         persisted.accessToken != state.accessToken || persisted.expiresAt > state.expiresAt {
-        // RFC 6749 permits a refresh response to omit refresh_token. A newer
-        // access token or expiry therefore proves another resolver completed a
-        // usable refresh even when the durable refresh token is unchanged.
-        return persisted
+    do {
+      let rotated = try await refreshCoordinator.refresh(key: key) {
+        if let persisted = try await store.load(key),
+           persisted.accessToken != state.accessToken || persisted.expiresAt > state.expiresAt {
+          // RFC 6749 permits a refresh response to omit refresh_token. A newer
+          // access token or expiry therefore proves another resolver completed a
+          // usable refresh even when the durable refresh token is unchanged.
+          return persisted
+        }
+        let rotated = try await exchange.refresh(state, client: client, now: clock.now)
+        // The new record is committed before the old one is discarded. A
+        // successful host migration removes its predecessor only after that
+        // commit; if cleanup fails, `loadState` still chooses the newest state.
+        let destination = CredentialRecordKey(clientID: client.clientID, host: rotated.host)
+        do {
+          try await store.replace(rotated, for: destination)
+        } catch {
+          throw RefreshPersistenceFailure(state: rotated)
+        }
+        if destination != key {
+          _ = try? await store.delete(key)
+        }
+        return rotated
       }
-      let rotated = try await exchange.refresh(state, client: client, now: clock.now)
-      // The new record is committed before the old one is discarded; if
-      // persistence fails, the process does not claim a successful refresh.
-      let destination = CredentialRecordKey(clientID: client.clientID, host: rotated.host)
-      try await store.replace(rotated, for: destination)
+      cachedState = rotated
       return rotated
+    } catch let failure as RefreshPersistenceFailure {
+      let destination = CredentialRecordKey(clientID: client.clientID, host: failure.state.host)
+      await refreshCoordinator.rememberUndurable(failure.state, for: [key, destination])
+      cachedState = failure.state
+      throw GatewayError(
+        code: .authenticationFailed,
+        message: "The refreshed OAuth credential could not be saved safely.",
+        outcomeUnknown: true,
+        recoveryGuidance: "Run `auth oauth2` again before retrying authentication."
+      )
     }
-    cachedState = rotated
-    return rotated
   }
 
   private func credential(from state: OAuthTokenState) throws -> ResolvedCredential {
@@ -227,6 +284,10 @@ public actor CredentialResolver: CredentialProvider {
       let key = CredentialRecordKey(clientID: client.clientID, host: host)
       if try await store.delete(key) { removed = true }
     }
+    let keys = WrikeHostPolicy.approvedAPIHosts.map {
+      CredentialRecordKey(clientID: client.clientID, host: $0)
+    }
+    await refreshCoordinator.forgetStates(for: keys)
     cachedState = nil
     return removed
   }

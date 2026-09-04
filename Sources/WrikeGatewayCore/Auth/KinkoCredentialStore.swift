@@ -1,9 +1,39 @@
 import Foundation
+import Darwin
 
 /// Runs an external process. Injected so credential-store tests never spawn a
 /// real binary and never require a provisioned vault.
 public protocol ProcessRunner: Sendable {
   func run(executable: String, arguments: [String], standardInput: Data?) async throws -> ProcessResult
+}
+
+/// A process runner that accepts caller-owned environment and liveness policy.
+/// `KinkoCredentialStore` uses this for its production runner; legacy custom
+/// test runners remain source compatible with the original ProcessRunner API.
+public protocol ConfigurableProcessRunner: ProcessRunner {
+  func run(
+    executable: String,
+    arguments: [String],
+    standardInput: Data?,
+    options: ProcessExecutionOptions
+  ) async throws -> ProcessResult
+}
+
+/// Execution controls for an injected external-process boundary.
+///
+/// A restricted environment is deliberately distinct from an empty inherited
+/// environment: credential-store calls must never acquire ambient variables
+/// from the embedding process.
+public struct ProcessExecutionOptions: Sendable, Equatable {
+  public let environment: [String: String]?
+  public let timeoutSeconds: Double?
+
+  public init(environment: [String: String]? = nil, timeoutSeconds: Double? = nil) {
+    self.environment = environment
+    self.timeoutSeconds = timeoutSeconds
+  }
+
+  public static let inherited = ProcessExecutionOptions()
 }
 
 public struct ProcessResult: Sendable, Equatable {
@@ -18,7 +48,7 @@ public struct ProcessResult: Sendable, Equatable {
   }
 }
 
-public struct SystemProcessRunner: ProcessRunner {
+public struct SystemProcessRunner: ConfigurableProcessRunner {
   /// Collects the two output streams that are drained on separate threads.
   private final class StreamCollector: @unchecked Sendable {
     private let lock = NSLock()
@@ -46,16 +76,27 @@ public struct SystemProcessRunner: ProcessRunner {
 
   public init() {}
 
+  public func run(executable: String, arguments: [String], standardInput: Data?) async throws -> ProcessResult {
+    try await run(
+      executable: executable,
+      arguments: arguments,
+      standardInput: standardInput,
+      options: .inherited
+    )
+  }
+
   public func run(
     executable: String,
     arguments: [String],
-    standardInput: Data?
+    standardInput: Data?,
+    options: ProcessExecutionOptions
   ) async throws -> ProcessResult {
     let process = Process()
     // The caller always passes an absolute path resolved by
     // `KinkoExecutableResolver`; `Process` itself never searches `PATH`.
     process.executableURL = URL(fileURLWithPath: executable)
     process.arguments = arguments
+    process.environment = options.environment
 
     let outputPipe = Pipe()
     let errorPipe = Pipe()
@@ -63,6 +104,12 @@ public struct SystemProcessRunner: ProcessRunner {
     process.standardError = errorPipe
     let inputPipe = standardInput.map { _ in Pipe() }
     process.standardInput = inputPipe
+
+    let collector = StreamCollector()
+    let group = DispatchGroup()
+    let queue = DispatchQueue.global(qos: .userInitiated)
+    let completion = ProcessCompletion(process: process, collector: collector, streamGroup: group)
+    process.terminationHandler = { _ in completion.processExited() }
 
     do {
       try process.run()
@@ -79,10 +126,6 @@ public struct SystemProcessRunner: ProcessRunner {
     // soon as the child fills the pipe buffer nobody is reading: the child
     // blocks on its write and this side blocks on the stream the child is no
     // longer producing.
-    let collector = StreamCollector()
-    let group = DispatchGroup()
-    let queue = DispatchQueue.global(qos: .userInitiated)
-
     if let standardInput, let inputHandle = inputPipe?.fileHandleForWriting {
       queue.async(group: group) {
         inputHandle.write(standardInput)
@@ -97,48 +140,154 @@ public struct SystemProcessRunner: ProcessRunner {
     queue.async(group: group) {
       collector.setErrorOutput((try? errorHandle.readToEnd()) ?? Data())
     }
-    await withCheckedContinuation { continuation in
-      group.notify(queue: queue) { continuation.resume() }
+    return try await completion.wait(timeoutSeconds: options.timeoutSeconds, queue: queue)
+  }
+
+  /// Protects Process and continuation state shared by cancellation, timeout,
+  /// Foundation's termination callback, and the pipe-draining workers.
+  private final class ProcessCompletion: @unchecked Sendable {
+    private let process: Process
+    private let collector: StreamCollector
+    private let streamGroup: DispatchGroup
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<ProcessResult, any Error>?
+    private var terminalReason: TerminalReason?
+    private var didExit = false
+
+    private enum TerminalReason {
+      case cancelled
+      case timedOut
     }
 
-    process.waitUntilExit()
-    let streams = collector.streams
-    return ProcessResult(
-      exitCode: process.terminationStatus,
-      standardOutput: streams.output,
-      standardError: streams.errorOutput
-    )
+    init(process: Process, collector: StreamCollector, streamGroup: DispatchGroup) {
+      self.process = process
+      self.collector = collector
+      self.streamGroup = streamGroup
+    }
+
+    func wait(timeoutSeconds: Double?, queue: DispatchQueue) async throws -> ProcessResult {
+      try await withTaskCancellationHandler {
+        try await withCheckedThrowingContinuation { continuation in
+          install(continuation: continuation)
+          if let timeoutSeconds {
+            scheduleTimeout(after: timeoutSeconds, queue: queue)
+          }
+        }
+      } onCancel: {
+        cancel()
+      }
+    }
+
+    func install(continuation: CheckedContinuation<ProcessResult, any Error>) {
+      lock.lock()
+      self.continuation = continuation
+      let exited = didExit
+      lock.unlock()
+      if exited { finishAfterStreams() }
+    }
+
+    func scheduleTimeout(after seconds: Double, queue: DispatchQueue) {
+      guard seconds > 0 else {
+        timeout()
+        return
+      }
+      queue.asyncAfter(deadline: .now() + seconds) { [self] in timeout() }
+    }
+
+    func cancel() {
+      stop(reason: .cancelled)
+    }
+
+    func processExited() {
+      lock.lock()
+      didExit = true
+      let hasContinuation = continuation != nil
+      lock.unlock()
+      if hasContinuation { finishAfterStreams() }
+    }
+
+    private func timeout() {
+      stop(reason: .timedOut)
+    }
+
+    private func stop(reason: TerminalReason) {
+      lock.lock()
+      if terminalReason == nil { terminalReason = reason }
+      let shouldTerminate = process.isRunning
+      lock.unlock()
+      guard shouldTerminate else { return }
+      process.terminate()
+      // A process may ignore SIGTERM. Escalate after a brief cleanup grace so
+      // timeout and task cancellation cannot leave a credential operation
+      // indefinitely pending.
+      DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.2) { [self] in
+        lock.lock()
+        let stillRunning = process.isRunning
+        lock.unlock()
+        if stillRunning { kill(process.processIdentifier, SIGKILL) }
+      }
+    }
+
+    private func finishAfterStreams() {
+      streamGroup.notify(queue: .global(qos: .userInitiated)) { [self] in
+        lock.lock()
+        guard let continuation else {
+          lock.unlock()
+          return
+        }
+        self.continuation = nil
+        let reason = terminalReason
+        let status = process.terminationStatus
+        lock.unlock()
+        switch reason {
+        case .cancelled:
+          continuation.resume(throwing: CancellationError())
+        case .timedOut:
+          continuation.resume(
+            throwing: GatewayError(
+              code: .fileOperationFailed,
+              message: "The credential-store command timed out.",
+              recoveryGuidance: "Check kinko, then retry the operation."
+            )
+          )
+        case nil:
+          let streams = collector.streams
+          continuation.resume(
+            returning: ProcessResult(
+              exitCode: status,
+              standardOutput: streams.output,
+              standardError: streams.errorOutput
+            )
+          )
+        }
+      }
+    }
   }
 }
 
 /// Finds the kinko executable.
 ///
-/// `Process` does not search `PATH`, and kinko is installed under a different
-/// prefix on Apple Silicon Homebrew (`/opt/homebrew/bin`), Intel Homebrew
-/// (`/usr/local/bin`), and Nix (a `/nix/store` path exposed only through
-/// `PATH`), so the absolute path is resolved here instead of being assumed.
+/// `Process` does not search `PATH`. The production facade trusts only the
+/// two fixed Homebrew locations; a host that needs another location supplies
+/// an explicit absolute executable path or an injected credential store.
 public struct KinkoExecutableResolver: Sendable {
-  /// Prefixes checked after `PATH`, so a Homebrew install is still found when
-  /// the binary runs from a launch context with a minimal environment.
+  /// Fixed absolute locations owned by the package's supported installation
+  /// methods. No ambient PATH lookup is performed.
   public static let fallbackPaths = ["/opt/homebrew/bin/kinko", "/usr/local/bin/kinko"]
 
-  private let searchPath: String?
+  private let trustedPaths: [String]
   private let isExecutable: @Sendable (String) -> Bool
 
   public init(
-    searchPath: String? = ProcessInfo.processInfo.environment["PATH"],
+    trustedPaths: [String] = KinkoExecutableResolver.fallbackPaths,
     isExecutable: @escaping @Sendable (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
   ) {
-    self.searchPath = searchPath
+    self.trustedPaths = trustedPaths.filter { $0.hasPrefix("/") }
     self.isExecutable = isExecutable
   }
 
   public func resolve() -> String? {
-    for directory in (searchPath ?? "").split(separator: ":", omittingEmptySubsequences: true) {
-      let candidate = URL(fileURLWithPath: String(directory)).appendingPathComponent("kinko").path
-      if isExecutable(candidate) { return candidate }
-    }
-    return Self.fallbackPaths.first(where: isExecutable)
+    trustedPaths.first(where: isExecutable)
   }
 }
 
@@ -231,25 +380,30 @@ public struct KinkoCredentialStore: CredentialStore {
   /// is pinned to the home directory instead of the working directory.
   public static var defaultScopePath: String { NSHomeDirectory() }
   public static let defaultProfile = "default"
+  /// A credential-store process must not be able to hold an SDK call forever.
+  public static let defaultProcessTimeoutSeconds = 15.0
 
   private let runner: any ProcessRunner
   private let executablePath: String?
   private let resolver: KinkoExecutableResolver
   private let scopePath: String
   private let profile: String
+  private let processTimeoutSeconds: Double
 
   public init(
     runner: any ProcessRunner = SystemProcessRunner(),
     executablePath: String? = nil,
     resolver: KinkoExecutableResolver = KinkoExecutableResolver(),
     scopePath: String = KinkoCredentialStore.defaultScopePath,
-    profile: String = KinkoCredentialStore.defaultProfile
+    profile: String = KinkoCredentialStore.defaultProfile,
+    processTimeoutSeconds: Double = KinkoCredentialStore.defaultProcessTimeoutSeconds
   ) {
     self.runner = runner
     self.executablePath = executablePath
     self.resolver = resolver
     self.scopePath = scopePath
     self.profile = profile
+    self.processTimeoutSeconds = processTimeoutSeconds
   }
 
   public func load(_ key: CredentialRecordKey) async throws -> OAuthTokenState? {
@@ -317,20 +471,50 @@ public struct KinkoCredentialStore: CredentialStore {
   }
 
   private func run(_ arguments: [String], standardInput: Data? = nil) async throws -> ProcessResult {
-    try await runner.run(
-      executable: try executable(),
-      arguments: arguments + ["--path", scopePath, "--profile", profile],
-      standardInput: standardInput
-    )
+    do {
+      let executable = try executable()
+      let arguments = arguments + ["--path", scopePath, "--profile", profile]
+      let options = ProcessExecutionOptions(
+        // kinko receives only stable execution settings. In particular it
+        // never inherits PATH or arbitrary host-app values that could carry
+        // secrets into an externally launched process.
+        environment: ["HOME": scopePath, "LC_ALL": "C"],
+        timeoutSeconds: processTimeoutSeconds
+      )
+      if let configurableRunner = runner as? any ConfigurableProcessRunner {
+        return try await configurableRunner.run(
+          executable: executable,
+          arguments: arguments,
+          standardInput: standardInput,
+          options: options
+        )
+      }
+      return try await runner.run(executable: executable, arguments: arguments, standardInput: standardInput)
+    } catch is CancellationError {
+      throw GatewayError(
+        code: .fileOperationFailed,
+        message: "The credential-store command was cancelled.",
+        recoveryGuidance: "Confirm the credential-store state before retrying."
+      )
+    }
   }
 
   private func executable() throws -> String {
-    if let executablePath { return executablePath }
+    if let executablePath {
+      guard executablePath.hasPrefix("/") else {
+        throw GatewayError(
+          code: .fileOperationFailed,
+          message: "The kinko credential-store executable path is not absolute.",
+          recoveryGuidance: "Configure an absolute trusted kinko executable path."
+        )
+      }
+      return executablePath
+    }
     guard let resolved = resolver.resolve() else {
       throw GatewayError(
         code: .fileOperationFailed,
         message: "The kinko credential-store executable was not found.",
-        recoveryGuidance: "Install kinko so that it is on PATH, or at "
+        recoveryGuidance: "Install kinko at "
           + KinkoExecutableResolver.fallbackPaths.joined(separator: " or ") + "."
       )
     }

@@ -61,4 +61,48 @@ struct SystemProcessRunnerTests {
       #expect(error.code == .fileOperationFailed)
     }
   }
+
+  @Test("A restricted process environment does not inherit host values")
+  func restrictedEnvironmentDoesNotInheritHostValues() async throws {
+    let result = try await SystemProcessRunner().run(
+      executable: "/bin/sh",
+      arguments: ["-c", "printf '%s' \"${WRIKE_GATEWAY_UNRELATED-unset}\""],
+      standardInput: nil,
+      options: ProcessExecutionOptions(environment: ["HOME": "/safe", "LC_ALL": "C"], timeoutSeconds: 1)
+    )
+    #expect(result.exitCode == 0)
+    #expect(String(data: result.standardOutput, encoding: .utf8) == "unset")
+  }
+
+  @Test("A timed-out child is terminated and returns promptly")
+  func timeoutTerminatesChild() async throws {
+    let started = Date()
+    await #expect(throws: GatewayError.self) {
+      _ = try await SystemProcessRunner().run(
+        executable: "/bin/sh",
+        arguments: ["-c", "trap '' TERM; while :; do :; done"],
+        standardInput: nil,
+        options: ProcessExecutionOptions(timeoutSeconds: 0.05)
+      )
+    }
+    #expect(Date().timeIntervalSince(started) < 1)
+  }
+
+  @Test("Cancelling a child process waits for cleanup and returns cancellation")
+  func cancellationTerminatesChild() async throws {
+    let runner = SystemProcessRunner()
+    let task = Task {
+      try await runner.run(
+        executable: "/bin/sh",
+        arguments: ["-c", "trap '' TERM; while :; do :; done"],
+        standardInput: nil,
+        options: ProcessExecutionOptions(timeoutSeconds: 5)
+      )
+    }
+    try await Task.sleep(for: .milliseconds(50))
+    task.cancel()
+    await #expect(throws: CancellationError.self) {
+      _ = try await task.value
+    }
+  }
 }

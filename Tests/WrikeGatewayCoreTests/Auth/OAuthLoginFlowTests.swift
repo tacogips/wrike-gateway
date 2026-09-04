@@ -467,7 +467,7 @@ struct OAuthRefreshTests {
     #expect(await transport.requestCount == 1)
   }
 
-  @Test("A failed persistence does not claim a successful refresh")
+  @Test("A rotated refresh-store failure is outcome-unknown and never reuses the invalidated predecessor")
   func failedPersistence() async throws {
     let clock = TestClock()
     let (state, key) = expiredState(clock: clock)
@@ -477,14 +477,37 @@ struct OAuthRefreshTests {
       {"access_token":"fake-new-access","refresh_token":"fake-new-refresh",\
       "expires_in":3600,"host":"www.wrike.com"}
       """)
-    let resolver = try makeResolver(transport: transport, store: store, clock: clock)
+    let coordinator = OAuthRefreshCoordinator()
+    let resolver = try makeResolver(
+      transport: transport,
+      store: store,
+      clock: clock,
+      refreshCoordinator: coordinator
+    )
 
-    await #expect(throws: GatewayError.self) {
+    do {
       _ = try await resolver.credential()
+      Issue.record("Expected the durability barrier to surface")
+    } catch let error as GatewayError {
+      #expect(error.code == .authenticationFailed)
+      #expect(error.outcomeUnknown)
+      #expect(error.recoveryGuidance?.contains("auth oauth2") == true)
     }
     // The old record is still the committed one.
     let stored = try #require(try await store.load(key))
     #expect(stored.refreshToken == SecretValue("fake-old-refresh"))
+
+    // A fresh facade-created resolver shares the in-process recovery barrier
+    // and therefore never resubmits the server-invalidated old refresh token.
+    let freshResolver = try makeResolver(
+      transport: transport,
+      store: store,
+      clock: clock,
+      refreshCoordinator: coordinator
+    )
+    let recovered = try await freshResolver.credential()
+    #expect(recovered.token == SecretValue("fake-new-access"))
+    #expect(await transport.requestCount == 1)
   }
 
   @Test("A rejected refresh returns AUTHENTICATION_FAILED without a retry loop")
@@ -553,6 +576,40 @@ struct OAuthRefreshTests {
     #expect(stored.refreshToken == SecretValue("fake-new-refresh"))
     #expect(stored.grantedScopes == ["wsReadOnly", "wsReadWrite"])
     #expect(stored.host == "app-eu.wrike.com")
+  }
+
+  @Test("A fresh resolver selects the migrated host record rather than a stale predecessor")
+  func migratedHostIsReusedByFreshResolver() async throws {
+    let clock = TestClock()
+    let (state, key) = expiredState(clock: clock)
+    let store = InMemoryCredentialStore(seed: [key: state])
+    let transport = RecordingTransport.succeeding(json: """
+      {"access_token":"fake-new-access","refresh_token":"fake-new-refresh",\
+      "expires_in":3600,"host":"app-eu.wrike.com"}
+      """)
+    let coordinator = OAuthRefreshCoordinator()
+    let leader = try makeResolver(
+      transport: transport,
+      store: store,
+      clock: clock,
+      refreshCoordinator: coordinator
+    )
+    _ = try await leader.credential()
+
+    let migratedKey = CredentialRecordKey(clientID: state.clientID, host: "app-eu.wrike.com")
+    #expect(try await store.load(key) == nil)
+    #expect(try await store.load(migratedKey)?.refreshToken == SecretValue("fake-new-refresh"))
+
+    let follower = try makeResolver(
+      transport: transport,
+      store: store,
+      clock: clock,
+      refreshCoordinator: coordinator
+    )
+    let reused = try await follower.credential()
+    #expect(reused.baseURL.host == "app-eu.wrike.com")
+    #expect(reused.token == SecretValue("fake-new-access"))
+    #expect(await transport.requestCount == 1)
   }
 
   @Test("An empty scope string is treated as omitted rather than as a grant of nothing")

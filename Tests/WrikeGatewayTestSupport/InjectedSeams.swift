@@ -241,13 +241,14 @@ public struct StubFileAccess: FileAccess {
 }
 
 /// Returns queued process results, used for the kinko credential-store tests.
-public actor StubProcessRunner: ProcessRunner {
+public actor StubProcessRunner: ConfigurableProcessRunner {
   public struct Invocation: Sendable, Equatable {
     public let executable: String
     public let arguments: [String]
     /// Recorded so tests can pin the exact bytes a subcommand receives on
     /// stdin, not merely that stdin was used.
     public let standardInput: Data?
+    public let options: ProcessExecutionOptions
 
     public var hadStandardInput: Bool { standardInput != nil }
   }
@@ -261,16 +262,27 @@ public actor StubProcessRunner: ProcessRunner {
 
   public var invocations: [Invocation] { recorded }
 
+  public func run(executable: String, arguments: [String], standardInput: Data?) async throws -> ProcessResult {
+    try await run(
+      executable: executable,
+      arguments: arguments,
+      standardInput: standardInput,
+      options: .inherited
+    )
+  }
+
   public func run(
     executable: String,
     arguments: [String],
-    standardInput: Data?
+    standardInput: Data?,
+    options: ProcessExecutionOptions
   ) async throws -> ProcessResult {
     recorded.append(
       Invocation(
         executable: executable,
         arguments: arguments,
-        standardInput: standardInput
+        standardInput: standardInput,
+        options: options
       )
     )
     guard !results.isEmpty else {
