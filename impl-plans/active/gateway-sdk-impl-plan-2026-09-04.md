@@ -1,6 +1,6 @@
 # Implementation plan: `WrikeGatewaySDK` facade on `GatewaySDKKit`
 
-**Status**: OAuth recovery and credential-process liveness revision committed in `a905a585ad641c45b7b8350914d8175fdb58bdd1`, with undurable-barrier provenance, cross-host external-reauthorization, partial-migration destination-reauthorization, and process-completion race corrections in `fd01b6bf47df242e171ad5ae9a7c68126fe3b896`, `304c710757a21c1ce6f0f0b51bc45586fa84198b`, `8d66e4392fd875d32cd9443375c32246e582c1aa`, and `72176b473b8e6ce918013fcc7da1bdd9951f94be`, after facade-specific credential isolation and OAuth host-migration safety revision `353d4c32b5b2cf2ce5f6e924e4b4189aa63a46ab`, credential-process and OAuth-durability revisions `666c8b4ee355e19ace2c5564f98277af695b8611` and `8670d86b580527bf31a42cab16eb0c9922f84a03`, mutation-outcome and OAuth-refresh safety revision `156a87e05ba13a7422b1dc31cc64161b5da14818`, regex safety follow-up `711fd1f1a3e13080a387dc92f360a88f52ef0cb3`, and security remediation implementation `1982392d58c3b0e0314775c5a9efc04cd0b7af2b`; all follow reviewed revision `92085a37a24b278165abf0a9a80bae7989d750e4` over baseline implementation `bcc2da8e6e9b6ab811e89fe1efb060445c08bf27`. SwiftLint remains externally blocked by SourceKitten framework loading.
+**Status**: OAuth recovery and credential-process liveness revision committed in `a905a585ad641c45b7b8350914d8175fdb58bdd1`, with undurable-barrier provenance, cross-host external-reauthorization, partial-migration destination-reauthorization, process-completion race corrections, and deterministic late-timeout test correction in `fd01b6bf47df242e171ad5ae9a7c68126fe3b896`, `304c710757a21c1ce6f0f0b51bc45586fa84198b`, `8d66e4392fd875d32cd9443375c32246e582c1aa`, `72176b473b8e6ce918013fcc7da1bdd9951f94be`, and `7c017241723db7153cf1599343c840fc48c8b0f7`, after facade-specific credential isolation and OAuth host-migration safety revision `353d4c32b5b2cf2ce5f6e924e4b4189aa63a46ab`, credential-process and OAuth-durability revisions `666c8b4ee355e19ace2c5564f98277af695b8611` and `8670d86b580527bf31a42cab16eb0c9922f84a03`, mutation-outcome and OAuth-refresh safety revision `156a87e05ba13a7422b1dc31cc64161b5da14818`, regex safety follow-up `711fd1f1a3e13080a387dc92f360a88f52ef0cb3`, and security remediation implementation `1982392d58c3b0e0314775c5a9efc04cd0b7af2b`; all follow reviewed revision `92085a37a24b278165abf0a9a80bae7989d750e4` over baseline implementation `bcc2da8e6e9b6ab811e89fe1efb060445c08bf27`. SwiftLint remains externally blocked by SourceKitten framework loading.
 **Workflow Mode**: `issue-resolution`
 **Workflow Execution**: `codex-design-and-implement-review-loop-session-90`
 **Issue Reference**: `comm-001038`, `Add WrikeGatewaySDK facade on GatewaySDKKit`, branch `feat/gateway-sdk`
@@ -676,3 +676,17 @@ a task complete on code inspection alone when its completion criteria require ex
   suites; and explicit-arm64 `swift build` passed. TASK-009 remains incomplete
   solely because SwiftLint again aborted when SourceKitten could not load
   `sourcekitdInProc.framework`.
+- 2026-09-04: The Step 6 test-integrity check found that the late-timeout
+  regression used a 0.05-second shell-startup assumption and failed once under
+  aggregate scheduling. Revision `7c017241723db7153cf1599343c840fc48c8b0f7`
+  adds internal timeout-scheduler and process-exit-observation seams. The
+  regression now pauses after `ProcessCompletion` records child exit, manually
+  fires the queued timeout callback, then releases normal completion; it
+  proves success cannot be relabeled without relying on wall-clock ordering.
+  Focused explicit-arm64 `swift test --filter
+  'SystemProcessRunnerTests|OAuthRefreshTests|WrikeSchemaCatalogExporterTests|SDKTests|SDKCommandTests|BinaryBoundaryTests'`
+  passed twice (`72` tests in `10` suites each run). Full explicit-arm64
+  `swift test --quiet` passed twice (`368` tests in `51` suites each run), and
+  explicit-arm64 `swift build` passed. TASK-009 remains incomplete solely
+  because SwiftLint source analysis is externally blocked by SourceKitten
+  framework loading.
