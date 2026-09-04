@@ -110,7 +110,8 @@ struct KinkoCredentialStoreContractTests {
       runner: runner,
       executablePath: "/usr/bin/true",
       scopePath: scopePath,
-      profile: profile
+      profile: profile,
+      executionContext: .facade
     )
   }
 
@@ -174,6 +175,52 @@ struct KinkoCredentialStoreContractTests {
     ])
     #expect(invocation.options.environment == ["HOME": Self.scopePath, "LC_ALL": "C"])
     #expect(invocation.options.timeoutSeconds == KinkoCredentialStore.defaultProcessTimeoutSeconds)
+  }
+
+  @Test("Facade credential commands use trusted paths and a restricted child environment")
+  func facadeContextIsolatedFromAmbientProcessSettings() async throws {
+    let runner = StubProcessRunner(results: [
+      ProcessResult(exitCode: 1, standardOutput: Data(), standardError: Data("secret not found\n".utf8))
+    ])
+    let trustedExecutable = "/opt/homebrew/bin/kinko"
+    let store = KinkoCredentialStore(
+      runner: runner,
+      resolver: KinkoExecutableResolver(
+        searchPath: "/tmp/host-controlled-bin",
+        trustedPaths: [trustedExecutable],
+        isExecutable: { $0 == trustedExecutable }
+      ),
+      scopePath: Self.scopePath,
+      executionContext: .facade
+    )
+
+    #expect(try await store.load(Self.key) == nil)
+    let invocation = try #require(await runner.invocations.first)
+    #expect(invocation.executable == trustedExecutable)
+    #expect(invocation.options.environment == ["HOME": Self.scopePath, "LC_ALL": "C"])
+  }
+
+  @Test("Command-line credential commands preserve inherited process behavior")
+  func commandLineContextPreservesInheritedEnvironment() async throws {
+    let runner = StubProcessRunner(results: [
+      ProcessResult(exitCode: 1, standardOutput: Data(), standardError: Data("secret not found\n".utf8))
+    ])
+    let executable = "/nix/store/kinko/bin/kinko"
+    let store = KinkoCredentialStore(
+      runner: runner,
+      resolver: KinkoExecutableResolver(
+        searchPath: "/nix/store/kinko/bin",
+        trustedPaths: [],
+        isExecutable: { $0 == executable }
+      ),
+      scopePath: Self.scopePath,
+      executionContext: .commandLine
+    )
+
+    #expect(try await store.load(Self.key) == nil)
+    let invocation = try #require(await runner.invocations.first)
+    #expect(invocation.executable == executable)
+    #expect(invocation.options.environment == nil)
   }
 
   @Test("replace writes the record on stdin and never on argv")
@@ -467,10 +514,21 @@ struct KinkoCredentialStoreContractTests {
 
 @Suite("Kinko executable resolution")
 struct KinkoExecutableResolverTests {
-  @Test("Only explicit trusted absolute paths are considered")
-  func usesExplicitTrustedPaths() {
+  @Test("Facade resolution considers only explicit trusted absolute paths")
+  func facadeUsesExplicitTrustedPaths() {
     let resolver = KinkoExecutableResolver(
+      searchPath: nil,
       trustedPaths: ["/nix/store/abc-kinko/bin/kinko", "/opt/homebrew/bin/kinko"],
+      isExecutable: { $0 == "/nix/store/abc-kinko/bin/kinko" || $0 == "/opt/homebrew/bin/kinko" }
+    )
+    #expect(resolver.resolve() == "/nix/store/abc-kinko/bin/kinko")
+  }
+
+  @Test("Command-line resolution preserves PATH before trusted prefixes")
+  func commandLinePrefersPath() {
+    let resolver = KinkoExecutableResolver(
+      searchPath: "/nix/store/abc-kinko/bin:/usr/bin",
+      trustedPaths: ["/opt/homebrew/bin/kinko"],
       isExecutable: { $0 == "/nix/store/abc-kinko/bin/kinko" || $0 == "/opt/homebrew/bin/kinko" }
     )
     #expect(resolver.resolve() == "/nix/store/abc-kinko/bin/kinko")
@@ -481,7 +539,7 @@ struct KinkoExecutableResolverTests {
     "/usr/local/bin/kinko"
   ])
   func fallsBackToHomebrewPrefixes(installed: String) {
-    let resolver = KinkoExecutableResolver(isExecutable: { $0 == installed })
+    let resolver = KinkoExecutableResolver(searchPath: nil, isExecutable: { $0 == installed })
     #expect(resolver.resolve() == installed)
   }
 
@@ -489,7 +547,8 @@ struct KinkoExecutableResolverTests {
   func missingExecutable() async throws {
     let store = KinkoCredentialStore(
       runner: StubProcessRunner(results: []),
-      resolver: KinkoExecutableResolver(trustedPaths: [], isExecutable: { _ in false })
+      resolver: KinkoExecutableResolver(searchPath: nil, trustedPaths: [], isExecutable: { _ in false }),
+      executionContext: .facade
     )
     do {
       _ = try await store.load(CredentialRecordKey(clientID: SecretValue("c"), host: "www.wrike.com"))

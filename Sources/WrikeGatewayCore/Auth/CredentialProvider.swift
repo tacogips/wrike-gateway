@@ -190,16 +190,21 @@ public actor CredentialResolver: CredentialProvider {
     do {
       let rotated = try await refreshCoordinator.refresh(key: key) {
         if let persisted = try await store.load(key),
-           persisted.accessToken != state.accessToken || persisted.expiresAt > state.expiresAt {
+           persisted.accessToken != state.accessToken
+             || persisted.refreshToken != state.refreshToken
+             || persisted.expiresAt > state.expiresAt {
           // RFC 6749 permits a refresh response to omit refresh_token. A newer
           // access token or expiry therefore proves another resolver completed a
           // usable refresh even when the durable refresh token is unchanged.
           return persisted
         }
         let rotated = try await exchange.refresh(state, client: client, now: clock.now)
-        // The new record is committed before the old one is discarded. A
-        // successful host migration removes its predecessor only after that
-        // commit; if cleanup fails, `loadState` still chooses the newest state.
+        // The new record is committed before the old one is discarded. If
+        // predecessor cleanup fails, replace the predecessor with the same
+        // rotated state so every durable key is safe for a fresh resolver to
+        // select. A failure to mirror that state becomes an explicit
+        // durability barrier rather than silently retaining an invalidated
+        // refresh token.
         let destination = CredentialRecordKey(clientID: client.clientID, host: rotated.host)
         do {
           try await store.replace(rotated, for: destination)
@@ -207,7 +212,15 @@ public actor CredentialResolver: CredentialProvider {
           throw RefreshPersistenceFailure(state: rotated)
         }
         if destination != key {
-          _ = try? await store.delete(key)
+          do {
+            _ = try await store.delete(key)
+          } catch {
+            do {
+              try await store.replace(rotated, for: key)
+            } catch {
+              throw RefreshPersistenceFailure(state: rotated)
+            }
+          }
         }
         return rotated
       }

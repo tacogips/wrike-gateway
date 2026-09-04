@@ -36,6 +36,16 @@ public struct ProcessExecutionOptions: Sendable, Equatable {
   public static let inherited = ProcessExecutionOptions()
 }
 
+/// Identifies the caller that owns a credential-store process boundary.
+///
+/// Command-line invocations retain the established PATH-based kinko discovery
+/// contract. Facade calls run inside another host process, so they require a
+/// fixed trusted executable location and a restricted child environment.
+public enum KinkoCredentialStoreExecutionContext: Sendable, Equatable {
+  case commandLine
+  case facade
+}
+
 public struct ProcessResult: Sendable, Equatable {
   public let exitCode: Int32
   public let standardOutput: Data
@@ -269,27 +279,34 @@ public struct SystemProcessRunner: ConfigurableProcessRunner {
 
 /// Finds the kinko executable.
 ///
-/// `Process` does not search `PATH`. The production facade trusts only the
-/// two fixed Homebrew locations; a host that needs another location supplies
-/// an explicit absolute executable path or an injected credential store.
+/// The command line preserves PATH discovery for existing installations. The
+/// production facade supplies this resolver with a nil search path, so a host
+/// process can never choose its credential executable through ambient PATH.
 public struct KinkoExecutableResolver: Sendable {
-  /// Fixed absolute locations owned by the package's supported installation
-  /// methods. No ambient PATH lookup is performed.
+  /// Fixed absolute locations used after command-line PATH discovery and as
+  /// the complete trusted set for facade execution.
   public static let fallbackPaths = ["/opt/homebrew/bin/kinko", "/usr/local/bin/kinko"]
 
+  private let searchPath: String?
   private let trustedPaths: [String]
   private let isExecutable: @Sendable (String) -> Bool
 
   public init(
+    searchPath: String? = ProcessInfo.processInfo.environment["PATH"],
     trustedPaths: [String] = KinkoExecutableResolver.fallbackPaths,
     isExecutable: @escaping @Sendable (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
   ) {
+    self.searchPath = searchPath
     self.trustedPaths = trustedPaths.filter { $0.hasPrefix("/") }
     self.isExecutable = isExecutable
   }
 
   public func resolve() -> String? {
-    trustedPaths.first(where: isExecutable)
+    for directory in (searchPath ?? "").split(separator: ":", omittingEmptySubsequences: true) {
+      let candidate = URL(fileURLWithPath: String(directory)).appendingPathComponent("kinko").path
+      if isExecutable(candidate) { return candidate }
+    }
+    return trustedPaths.first(where: isExecutable)
   }
 }
 
@@ -391,21 +408,26 @@ public struct KinkoCredentialStore: CredentialStore {
   private let scopePath: String
   private let profile: String
   private let processTimeoutSeconds: Double
+  private let executionContext: KinkoCredentialStoreExecutionContext
 
   public init(
     runner: any ProcessRunner = SystemProcessRunner(),
     executablePath: String? = nil,
-    resolver: KinkoExecutableResolver = KinkoExecutableResolver(),
+    resolver: KinkoExecutableResolver? = nil,
     scopePath: String = KinkoCredentialStore.defaultScopePath,
     profile: String = KinkoCredentialStore.defaultProfile,
-    processTimeoutSeconds: Double = KinkoCredentialStore.defaultProcessTimeoutSeconds
+    processTimeoutSeconds: Double = KinkoCredentialStore.defaultProcessTimeoutSeconds,
+    executionContext: KinkoCredentialStoreExecutionContext = .commandLine
   ) {
     self.runner = runner
     self.executablePath = executablePath
-    self.resolver = resolver
+    self.resolver = resolver ?? KinkoExecutableResolver(
+      searchPath: executionContext == .commandLine ? ProcessInfo.processInfo.environment["PATH"] : nil
+    )
     self.scopePath = scopePath
     self.profile = profile
     self.processTimeoutSeconds = processTimeoutSeconds
+    self.executionContext = executionContext
   }
 
   public func load(_ key: CredentialRecordKey) async throws -> OAuthTokenState? {
@@ -477,10 +499,7 @@ public struct KinkoCredentialStore: CredentialStore {
       let executable = try executable()
       let arguments = arguments + ["--path", scopePath, "--profile", profile]
       let options = ProcessExecutionOptions(
-        // kinko receives only stable execution settings. In particular it
-        // never inherits PATH or arbitrary host-app values that could carry
-        // secrets into an externally launched process.
-        environment: ["HOME": scopePath, "LC_ALL": "C"],
+        environment: executionContext == .facade ? ["HOME": scopePath, "LC_ALL": "C"] : nil,
         timeoutSeconds: processTimeoutSeconds
       )
       if let configurableRunner = runner as? any ConfigurableProcessRunner {
@@ -513,11 +532,19 @@ public struct KinkoCredentialStore: CredentialStore {
       return executablePath
     }
     guard let resolved = resolver.resolve() else {
+      let recoveryGuidance: String
+      switch executionContext {
+      case .commandLine:
+        recoveryGuidance = "Install kinko on PATH, or at "
+          + KinkoExecutableResolver.fallbackPaths.joined(separator: " or ") + "."
+      case .facade:
+        recoveryGuidance = "Install kinko at "
+          + KinkoExecutableResolver.fallbackPaths.joined(separator: " or ") + "."
+      }
       throw GatewayError(
         code: .fileOperationFailed,
         message: "The kinko credential-store executable was not found.",
-        recoveryGuidance: "Install kinko at "
-          + KinkoExecutableResolver.fallbackPaths.joined(separator: " or ") + "."
+        recoveryGuidance: recoveryGuidance
       )
     }
     return resolved

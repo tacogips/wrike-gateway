@@ -28,7 +28,47 @@ public enum GatewayComposition {
     definitions: [CapabilityDefinition],
     environment: any EnvironmentReader = ProcessEnvironmentReader()
   ) throws -> GraphQLRuntime {
-    try compose(role: role, definitions: definitions, environment: environment).runtime
+    try compose(
+      role: role,
+      definitions: definitions,
+      environment: environment,
+      store: KinkoCredentialStore(executionContext: .commandLine)
+    ).runtime
+  }
+
+  /// Composes one caller-scoped SDK runtime.
+  ///
+  /// The facade must not inherit an embedding application's PATH or arbitrary
+  /// environment when it reaches the credential store. Command-line entry
+  /// points continue to use `makeRuntime`, preserving their established kinko
+  /// discovery behavior.
+  static func makeFacadeRuntime(
+    role: RoleDescriptor,
+    definitions: [CapabilityDefinition],
+    environment: any EnvironmentReader
+  ) throws -> GraphQLRuntime {
+    try makeFacadeRuntime(
+      role: role,
+      definitions: definitions,
+      environment: environment,
+      makeCredentialStore: { context in KinkoCredentialStore(executionContext: context) }
+    )
+  }
+
+  /// Test seam for proving the facade selects the isolated credential boundary
+  /// without permitting transport or host-policy replacement.
+  static func makeFacadeRuntime(
+    role: RoleDescriptor,
+    definitions: [CapabilityDefinition],
+    environment: any EnvironmentReader,
+    makeCredentialStore: @escaping @Sendable (KinkoCredentialStoreExecutionContext) -> any CredentialStore
+  ) throws -> GraphQLRuntime {
+    try compose(
+      role: role,
+      definitions: definitions,
+      environment: environment,
+      store: makeCredentialStore(.facade)
+    ).runtime
   }
 
   /// - Parameter environment: where credentials and endpoint overrides are
@@ -41,7 +81,12 @@ public enum GatewayComposition {
     definitions: [CapabilityDefinition],
     environment: any EnvironmentReader = ProcessEnvironmentReader()
   ) throws -> CommandFrame {
-    let graph = try compose(role: role, definitions: definitions, environment: environment)
+    let graph = try compose(
+      role: role,
+      definitions: definitions,
+      environment: environment,
+      store: KinkoCredentialStore(executionContext: .commandLine)
+    )
     // Resolved once, at command composition, so a malformed port fails before a login
     // starts rather than after a listener has already bound.
     let callbackPort = try WrikeOAuthEndpoints.resolveCallbackPort(from: environment)
@@ -66,12 +111,12 @@ public enum GatewayComposition {
   private static func compose(
     role: RoleDescriptor,
     definitions: [CapabilityDefinition],
-    environment: any EnvironmentReader
+    environment: any EnvironmentReader,
+    store: any CredentialStore
   ) throws -> ComposedGraph {
     let registry = try CapabilityRegistry(tier: role.tier, definitions: definitions)
     let planner = CapabilityPlanner(registry: registry)
     let transport = URLSessionWrikeTransport()
-    let store = KinkoCredentialStore()
     let clock = SystemClock()
     // The token endpoint is on the login host with an `/oauth2` path, which the
     // API transport's policy refuses on both counts, so the exchange gets its

@@ -92,6 +92,21 @@ struct ReaderSDKTests {
     #expect(facade.rawOutput + "\n" == command.standardOutput)
   }
 
+  @Test("Facade composition selects the isolated credential-store boundary")
+  func facadeCompositionUsesIsolatedCredentialStore() throws {
+    let captured = CredentialStoreContextCapture()
+    _ = try GatewayComposition.makeFacadeRuntime(
+      role: .reader,
+      definitions: ReadCapabilities.all,
+      environment: StaticEnvironmentReader(),
+      makeCredentialStore: { context in
+        captured.record(context)
+        return InMemoryCredentialStore()
+      }
+    )
+    #expect(captured.value == .facade)
+  }
+
   @Test("Facade returns a deterministic envelope when runtime composition fails")
   func runtimeFactoryFailureEnvelope() async throws {
     let failure = GatewayError.validation("Test runtime composition failed.")
@@ -240,6 +255,23 @@ private final class EnvironmentCapture: @unchecked Sendable {
   }
 
   func record(_ value: String?) {
+    lock.lock()
+    stored = value
+    lock.unlock()
+  }
+}
+
+private final class CredentialStoreContextCapture: @unchecked Sendable {
+  private let lock = NSLock()
+  private var stored: KinkoCredentialStoreExecutionContext?
+
+  var value: KinkoCredentialStoreExecutionContext? {
+    lock.lock()
+    defer { lock.unlock() }
+    return stored
+  }
+
+  func record(_ value: KinkoCredentialStoreExecutionContext) {
     lock.lock()
     stored = value
     lock.unlock()

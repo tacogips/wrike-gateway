@@ -12,7 +12,7 @@ public struct WrikeGatewaySDK: GatewaySDK {
 
   public init(role: RoleDescriptor, definitions: [CapabilityDefinition]) throws {
     try self.init(role: role, definitions: definitions, makeRuntime: { environment in
-      try GatewayComposition.makeRuntime(role: role, definitions: definitions, environment: environment)
+      try GatewayComposition.makeFacadeRuntime(role: role, definitions: definitions, environment: environment)
     })
   }
 

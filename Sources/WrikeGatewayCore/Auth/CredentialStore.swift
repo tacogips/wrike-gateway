@@ -71,6 +71,7 @@ public protocol CredentialStore: Sendable {
 public actor InMemoryCredentialStore: CredentialStore {
   private var records: [CredentialRecordKey: OAuthTokenState] = [:]
   private var failNextReplace = false
+  private var shouldFailNextDelete = false
 
   public init(seed: [CredentialRecordKey: OAuthTokenState] = [:]) {
     self.records = seed
@@ -79,6 +80,11 @@ public actor InMemoryCredentialStore: CredentialStore {
   /// Simulates an atomic persistence failure for refresh tests.
   public func failNextWrite() {
     failNextReplace = true
+  }
+
+  /// Simulates a predecessor-cleanup failure during host migration tests.
+  public func failNextDelete() {
+    shouldFailNextDelete = true
   }
 
   public func load(_ key: CredentialRecordKey) async throws -> OAuthTokenState? {
@@ -97,7 +103,14 @@ public actor InMemoryCredentialStore: CredentialStore {
   }
 
   public func delete(_ key: CredentialRecordKey) async throws -> Bool {
-    records.removeValue(forKey: key) != nil
+    if shouldFailNextDelete {
+      shouldFailNextDelete = false
+      throw GatewayError(
+        code: .fileOperationFailed,
+        message: "The credential store rejected removal of the token record."
+      )
+    }
+    return records.removeValue(forKey: key) != nil
   }
 
   public func hasRecord(_ key: CredentialRecordKey) async throws -> Bool {

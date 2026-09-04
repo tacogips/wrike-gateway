@@ -612,6 +612,40 @@ struct OAuthRefreshTests {
     #expect(await transport.requestCount == 1)
   }
 
+  @Test("A failed host-predecessor delete mirrors the rotated state for fresh resolvers")
+  func failedMigratedHostCleanupKeepsEveryRecordSafe() async throws {
+    let clock = TestClock()
+    let (state, key) = expiredState(clock: clock)
+    let store = InMemoryCredentialStore(seed: [key: state])
+    await store.failNextDelete()
+    let transport = RecordingTransport.succeeding(json: """
+      {"access_token":"fake-new-access","refresh_token":"fake-new-refresh",\
+      "expires_in":3600,"host":"app-eu.wrike.com"}
+      """)
+    let coordinator = OAuthRefreshCoordinator()
+    let leader = try makeResolver(
+      transport: transport,
+      store: store,
+      clock: clock,
+      refreshCoordinator: coordinator
+    )
+    _ = try await leader.credential()
+
+    let migratedKey = CredentialRecordKey(clientID: state.clientID, host: "app-eu.wrike.com")
+    #expect(try await store.load(key)?.refreshToken == SecretValue("fake-new-refresh"))
+    #expect(try await store.load(migratedKey)?.refreshToken == SecretValue("fake-new-refresh"))
+
+    let follower = try makeResolver(
+      transport: transport,
+      store: store,
+      clock: clock,
+      refreshCoordinator: coordinator
+    )
+    let report = try await follower.status()
+    #expect(report.host == "app-eu.wrike.com")
+    #expect(await transport.requestCount == 1)
+  }
+
   @Test("An empty scope string is treated as omitted rather than as a grant of nothing")
   func refreshIgnoresEmptyScope() async throws {
     let clock = TestClock()
