@@ -27,6 +27,14 @@ fileprivate enum OAuthStateResolution: Sendable {
   }
 }
 
+/// One durable record observed while reconciling every approved-host alias for
+/// an OAuth client. The optional state preserves a deletion as an authoritative
+/// observation rather than dropping that key from the reconciliation group.
+fileprivate struct OAuthDurableState: Sendable {
+  let key: CredentialRecordKey
+  let state: OAuthTokenState?
+}
+
 /// Coordinates refresh-token rotation across independently constructed
 /// resolvers that address the same durable credential record.
 public actor OAuthRefreshCoordinator {
@@ -58,22 +66,36 @@ public actor OAuthRefreshCoordinator {
     return try await task.value
   }
 
-  /// Reconciles a process-local rotation barrier against the durable record.
-  /// The barrier wins only while the durable record is exactly the predecessor
-  /// that upstream may already have invalidated. Any changed durable value is
-  /// authoritative and retires the stale in-memory barrier.
-  fileprivate func resolvedState(
-    for key: CredentialRecordKey,
-    durableState: OAuthTokenState?
-  ) -> OAuthStateResolution? {
-    guard let undurable = undurableStates[key] else {
-      return durableState.map(OAuthStateResolution.durable)
+  /// Reconciles every approved-host alias for one OAuth client as a rotation
+  /// group. A changed or deleted durable alias proves an external replacement
+  /// or reauthorization, so every sibling barrier must retire before candidate
+  /// selection can let an older undurable state shadow that durable record.
+  fileprivate func resolvedStates(
+    for durableStates: [OAuthDurableState]
+  ) -> [CredentialRecordKey: OAuthStateResolution] {
+    let durableByKey = Dictionary(
+      uniqueKeysWithValues: durableStates.map { ($0.key, $0) }
+    )
+    let barrierKeys = undurableStates.keys.filter { durableByKey[$0] != nil }
+    let hasAuthoritativeReplacement = barrierKeys.contains { key in
+      guard let barrier = undurableStates[key], let durable = durableByKey[key] else {
+        return false
+      }
+      return durable.state != barrier.predecessor
     }
-    guard durableState == undurable.predecessor else {
-      undurableStates.removeValue(forKey: key)
-      return durableState.map(OAuthStateResolution.durable)
+    if hasAuthoritativeReplacement {
+      for key in barrierKeys {
+        undurableStates.removeValue(forKey: key)
+      }
     }
-    return .undurable(undurable.state)
+
+    return durableStates.reduce(into: [:]) { resolutions, durable in
+      if let barrier = undurableStates[durable.key] {
+        resolutions[durable.key] = .undurable(barrier.state)
+      } else if let state = durable.state {
+        resolutions[durable.key] = .durable(state)
+      }
+    }
   }
 
   func rememberUndurable(
@@ -193,11 +215,15 @@ public actor CredentialResolver: CredentialProvider {
   private func loadState() async throws -> OAuthTokenState? {
     if let cachedState { return cachedState }
     guard let client = OAuthClientConfiguration.resolve(from: environment) else { return nil }
+    let keys = recordKeys(for: client.clientID)
+    var durableStates: [OAuthDurableState] = []
+    for key in keys {
+      durableStates.append(OAuthDurableState(key: key, state: try await store.load(key)))
+    }
+    let resolutions = await refreshCoordinator.resolvedStates(for: durableStates)
     var candidates: [OAuthTokenState] = []
-    for host in WrikeHostPolicy.approvedAPIHosts {
-      let key = CredentialRecordKey(clientID: client.clientID, host: host)
-      let durableState = try await store.load(key)
-      if let resolution = await refreshCoordinator.resolvedState(for: key, durableState: durableState) {
+    for key in keys {
+      if let resolution = resolutions[key] {
         candidates.append(resolution.state)
       }
     }
@@ -231,24 +257,31 @@ public actor CredentialResolver: CredentialProvider {
     let clock = self.clock
     let refreshCoordinator = self.refreshCoordinator
     let key = CredentialRecordKey(clientID: client.clientID, host: state.host)
+    let keys = recordKeys(for: client.clientID)
     do {
       let resolution = try await refreshCoordinator.refresh(key: key) {
-        let persistedAtSource = try await store.load(key)
-        let reconciledAtSource = await refreshCoordinator.resolvedState(
-          for: key,
-          durableState: persistedAtSource
-        )
-        if let reconciledAtSource {
-          let persisted = reconciledAtSource.state
+        var durableStates: [OAuthDurableState] = []
+        for recordKey in keys {
+          durableStates.append(
+            OAuthDurableState(key: recordKey, state: try await store.load(recordKey))
+          )
+        }
+        let reconciledStates = await refreshCoordinator.resolvedStates(for: durableStates)
+        if let reconciled = reconciledStates.values.max(by: { lhs, rhs in
+          if lhs.state.expiresAt == rhs.state.expiresAt { return lhs.state.host < rhs.state.host }
+          return lhs.state.expiresAt < rhs.state.expiresAt
+        }) {
+          let persisted = reconciled.state
           if persisted.accessToken != state.accessToken
             || persisted.refreshToken != state.refreshToken
             || persisted.expiresAt > state.expiresAt {
             // RFC 6749 permits a refresh response to omit refresh_token. A newer
             // access token or expiry therefore proves another resolver completed a
             // usable refresh even when the durable refresh token is unchanged.
-            return reconciledAtSource
+            return reconciled
           }
         }
+        let persistedAtSource = durableStates.first { $0.key == key }?.state
         let rotated = try await exchange.refresh(state, client: client, now: clock.now)
         // The new record is committed before the old one is discarded. If
         // predecessor cleanup fails, replace the predecessor with the same
@@ -257,9 +290,7 @@ public actor CredentialResolver: CredentialProvider {
         // durability barrier rather than silently retaining an invalidated
         // refresh token.
         let destination = CredentialRecordKey(clientID: client.clientID, host: rotated.host)
-        let persistedAtDestination = destination == key
-          ? persistedAtSource
-          : try await store.load(destination)
+        let persistedAtDestination = durableStates.first { $0.key == destination }?.state
         do {
           try await store.replace(rotated, for: destination)
         } catch {

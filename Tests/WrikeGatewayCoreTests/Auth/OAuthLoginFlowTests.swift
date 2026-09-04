@@ -628,6 +628,53 @@ struct OAuthRefreshTests {
     #expect(await transport.requestCount == 2)
   }
 
+  @Test("External reauthorization retires every cross-host undurable alias")
+  func externalReauthorizationDoesNotLeaveMigrationBarrier() async throws {
+    let clock = TestClock()
+    let (state, key) = expiredState(clock: clock)
+    let store = InMemoryCredentialStore(seed: [key: state])
+    await store.failNextWrite()
+    let transport = RecordingTransport.succeeding(json: """
+      {"access_token":"fake-undurable-access","refresh_token":"fake-undurable-refresh",\
+      "expires_in":7200,"host":"app-eu.wrike.com"}
+      """)
+    let coordinator = OAuthRefreshCoordinator()
+    let failingResolver = try makeResolver(
+      transport: transport,
+      store: store,
+      clock: clock,
+      refreshCoordinator: coordinator
+    )
+
+    await #expect(throws: GatewayError.self) {
+      _ = try await failingResolver.credential()
+    }
+
+    // A separate process completes a new authorization at www. Its shorter
+    // lifetime must still replace the longer-lived undurable EU migration
+    // barrier in a newly constructed resolver.
+    let reauthorized = OAuthTokenState(
+      accessToken: SecretValue("fake-reauthorized-access"),
+      refreshToken: SecretValue("fake-reauthorized-refresh"),
+      expiresAt: clock.now.addingTimeInterval(3600),
+      grantedScopes: ["wsReadOnly"],
+      host: "www.wrike.com",
+      clientID: SecretValue("fake-client-id")
+    )
+    try await store.replace(reauthorized, for: key)
+
+    let freshResolver = try makeResolver(
+      transport: transport,
+      store: store,
+      clock: clock,
+      refreshCoordinator: coordinator
+    )
+    let fresh = try await freshResolver.credential()
+    #expect(fresh.token == SecretValue("fake-reauthorized-access"))
+    #expect(fresh.baseURL.host == "www.wrike.com")
+    #expect(await transport.requestCount == 1)
+  }
+
   @Test("An undurable reuse by a stale resolver preserves its recovery barrier")
   func staleResolverCannotRetireUndurableBarrierWithoutPersistence() async throws {
     let clock = TestClock()
