@@ -1,6 +1,6 @@
 # Implementation plan: `WrikeGatewaySDK` facade on `GatewaySDKKit`
 
-**Status**: Mutation-outcome and OAuth-refresh safety revision committed in `156a87e05ba13a7422b1dc31cc64161b5da14818` after regex safety follow-up `711fd1f1a3e13080a387dc92f360a88f52ef0cb3` and security remediation implementation `1982392d58c3b0e0314775c5a9efc04cd0b7af2b`, following implementation commit `792c0054f368e0e4a32d8ecd602bf51a9b6c5303`; all follow reviewed revision `92085a37a24b278165abf0a9a80bae7989d750e4` over baseline implementation `bcc2da8e6e9b6ab811e89fe1efb060445c08bf27`. SwiftLint remains externally blocked by SourceKitten framework loading.
+**Status**: Credential-process and OAuth-durability safety revision committed in `666c8b4ee355e19ace2c5564f98277af695b8611` after mutation-outcome and OAuth-refresh safety revision `156a87e05ba13a7422b1dc31cc64161b5da14818`, regex safety follow-up `711fd1f1a3e13080a387dc92f360a88f52ef0cb3`, and security remediation implementation `1982392d58c3b0e0314775c5a9efc04cd0b7af2b`; all follow reviewed revision `92085a37a24b278165abf0a9a80bae7989d750e4` over baseline implementation `bcc2da8e6e9b6ab811e89fe1efb060445c08bf27`. SwiftLint remains externally blocked by SourceKitten framework loading.
 **Workflow Mode**: `issue-resolution`
 **Workflow Execution**: `codex-design-and-implement-review-loop-session-90`
 **Issue Reference**: `comm-001038`, `Add WrikeGatewaySDK facade on GatewaySDKKit`, branch `feat/gateway-sdk`
@@ -547,3 +547,25 @@ a task complete on code inspection alone when its completion criteria require ex
   `156a87e05ba13a7422b1dc31cc64161b5da14818`. TASK-009 remains incomplete
   solely because SwiftLint source analysis is externally blocked by SourceKitten
   framework loading.
+- 2026-09-04: Adversarial-review credential-boundary follow-up removes ambient
+  `PATH` resolution from production kinko selection, requires an explicit
+  absolute path outside the fixed trusted Homebrew locations, and launches
+  kinko with only `HOME` and `LC_ALL` rather than inherited host-process
+  values. `SystemProcessRunner` now bounds credential commands, terminates the
+  exact child on timeout or task cancellation, drains cleanup safely, and maps
+  cancellation to a non-secret credential-store error. Refresh durability now
+  retains an in-process replacement state after an atomic-store failure and
+  returns `AUTHENTICATION_FAILED_OUTCOME_UNKNOWN` with reauthorization guidance
+  instead of resubmitting an invalidated rotated token. Host migration removes
+  the old record after a successful destination commit; fresh resolvers also
+  choose the newest available state deterministically if cleanup could not
+  complete. Focused explicit-arm64 `swift test --filter
+  'OAuthRefreshTests|KinkoCredentialStoreContractTests|KinkoExecutableResolverTests|SystemProcessRunnerTests'`
+  passed 40 tests, including bounded timeout/cancellation, restricted child
+  environment, rotating-store failure, and fresh-resolver host migration
+  regressions. The explicit-arm64 `swift build` and full `swift test` also pass
+  (`355` tests in `51` suites, zero failures). The authorized implementation is committed in
+  `666c8b4ee355e19ace2c5564f98277af695b8611`; TASK-009 remains incomplete
+  solely for the pre-analysis SourceKitten/SwiftLint environment blocker, which
+  was retried and again failed loading `sourcekitdInProc.framework` before
+  analysis. Whitespace checks passed and GatewaySDKKit remains unchanged.
