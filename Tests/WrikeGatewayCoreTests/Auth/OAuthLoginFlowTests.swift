@@ -628,6 +628,52 @@ struct OAuthRefreshTests {
     #expect(await transport.requestCount == 2)
   }
 
+  @Test("An undurable reuse by a stale resolver preserves its recovery barrier")
+  func staleResolverCannotRetireUndurableBarrierWithoutPersistence() async throws {
+    let clock = TestClock()
+    let (state, key) = expiredState(clock: clock)
+    let store = InMemoryCredentialStore(seed: [key: state])
+    await store.failNextWrite()
+    let transport = RecordingTransport.succeeding(json: """
+      {"access_token":"fake-undurable-access","refresh_token":"fake-undurable-refresh",\
+      "expires_in":3600,"host":"www.wrike.com"}
+      """)
+    let coordinator = OAuthRefreshCoordinator()
+    let staleResolver = try makeResolver(
+      transport: transport,
+      store: store,
+      clock: clock,
+      refreshCoordinator: coordinator
+    )
+    // Cache the durable predecessor before another resolver rotates it.
+    _ = try await staleResolver.status()
+
+    let failingResolver = try makeResolver(
+      transport: transport,
+      store: store,
+      clock: clock,
+      refreshCoordinator: coordinator
+    )
+    await #expect(throws: GatewayError.self) {
+      _ = try await failingResolver.credential()
+    }
+
+    // This resolver reuses the in-process state. It must not clear the barrier
+    // because no credential-store write happened on this path.
+    let reused = try await staleResolver.credential()
+    #expect(reused.token == SecretValue("fake-undurable-access"))
+
+    let freshResolver = try makeResolver(
+      transport: transport,
+      store: store,
+      clock: clock,
+      refreshCoordinator: coordinator
+    )
+    let fresh = try await freshResolver.credential()
+    #expect(fresh.token == SecretValue("fake-undurable-access"))
+    #expect(await transport.requestCount == 1)
+  }
+
   @Test("A rejected refresh returns AUTHENTICATION_FAILED without a retry loop")
   func rejectedRefresh() async throws {
     let clock = TestClock()

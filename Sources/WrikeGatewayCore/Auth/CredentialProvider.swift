@@ -8,6 +8,25 @@ public protocol CredentialProvider: Sendable {
   func refreshedCredential(after stale: ResolvedCredential) async throws -> ResolvedCredential?
 }
 
+/// Distinguishes a record proven durable from an in-process rotation barrier.
+/// Both states are usable for the current process, but only a durable state may
+/// retire aliases that still protect a server-invalidated predecessor.
+fileprivate enum OAuthStateResolution: Sendable {
+  case durable(OAuthTokenState)
+  case undurable(OAuthTokenState)
+
+  var state: OAuthTokenState {
+    switch self {
+    case let .durable(state), let .undurable(state): state
+    }
+  }
+
+  var isDurable: Bool {
+    if case .durable = self { return true }
+    return false
+  }
+}
+
 /// Coordinates refresh-token rotation across independently constructed
 /// resolvers that address the same durable credential record.
 public actor OAuthRefreshCoordinator {
@@ -18,7 +37,7 @@ public actor OAuthRefreshCoordinator {
     let predecessor: OAuthTokenState?
   }
 
-  private var inFlight: [CredentialRecordKey: Task<OAuthTokenState, any Error>] = [:]
+  private var inFlight: [CredentialRecordKey: Task<OAuthStateResolution, any Error>] = [:]
   /// A refresh token can be rotated successfully before its durable store
   /// rejects the replacement. Retain that state for the current process so a
   /// fresh facade runtime never resubmits the invalidated predecessor.
@@ -26,14 +45,14 @@ public actor OAuthRefreshCoordinator {
 
   public init() {}
 
-  func refresh(
+  fileprivate func refresh(
     key: CredentialRecordKey,
-    operation: @escaping @Sendable () async throws -> OAuthTokenState
-  ) async throws -> OAuthTokenState {
+    operation: @escaping @Sendable () async throws -> OAuthStateResolution
+  ) async throws -> OAuthStateResolution {
     if let task = inFlight[key] {
       return try await task.value
     }
-    let task = Task<OAuthTokenState, any Error> { try await operation() }
+    let task = Task<OAuthStateResolution, any Error> { try await operation() }
     inFlight[key] = task
     defer { inFlight[key] = nil }
     return try await task.value
@@ -43,16 +62,18 @@ public actor OAuthRefreshCoordinator {
   /// The barrier wins only while the durable record is exactly the predecessor
   /// that upstream may already have invalidated. Any changed durable value is
   /// authoritative and retires the stale in-memory barrier.
-  func reconciledState(
+  fileprivate func resolvedState(
     for key: CredentialRecordKey,
     durableState: OAuthTokenState?
-  ) -> OAuthTokenState? {
-    guard let undurable = undurableStates[key] else { return durableState }
+  ) -> OAuthStateResolution? {
+    guard let undurable = undurableStates[key] else {
+      return durableState.map(OAuthStateResolution.durable)
+    }
     guard durableState == undurable.predecessor else {
       undurableStates.removeValue(forKey: key)
-      return durableState
+      return durableState.map(OAuthStateResolution.durable)
     }
-    return undurable.state
+    return .undurable(undurable.state)
   }
 
   func rememberUndurable(
@@ -176,8 +197,8 @@ public actor CredentialResolver: CredentialProvider {
     for host in WrikeHostPolicy.approvedAPIHosts {
       let key = CredentialRecordKey(clientID: client.clientID, host: host)
       let durableState = try await store.load(key)
-      if let state = await refreshCoordinator.reconciledState(for: key, durableState: durableState) {
-        candidates.append(state)
+      if let resolution = await refreshCoordinator.resolvedState(for: key, durableState: durableState) {
+        candidates.append(resolution.state)
       }
     }
     // Host migration may briefly leave an old and a replacement key. Choose
@@ -211,20 +232,22 @@ public actor CredentialResolver: CredentialProvider {
     let refreshCoordinator = self.refreshCoordinator
     let key = CredentialRecordKey(clientID: client.clientID, host: state.host)
     do {
-      let rotated = try await refreshCoordinator.refresh(key: key) {
+      let resolution = try await refreshCoordinator.refresh(key: key) {
         let persistedAtSource = try await store.load(key)
-        let reconciledAtSource = await refreshCoordinator.reconciledState(
+        let reconciledAtSource = await refreshCoordinator.resolvedState(
           for: key,
           durableState: persistedAtSource
         )
-        if let persisted = reconciledAtSource,
-           persisted.accessToken != state.accessToken
-             || persisted.refreshToken != state.refreshToken
-             || persisted.expiresAt > state.expiresAt {
-          // RFC 6749 permits a refresh response to omit refresh_token. A newer
-          // access token or expiry therefore proves another resolver completed a
-          // usable refresh even when the durable refresh token is unchanged.
-          return persisted
+        if let reconciledAtSource {
+          let persisted = reconciledAtSource.state
+          if persisted.accessToken != state.accessToken
+            || persisted.refreshToken != state.refreshToken
+            || persisted.expiresAt > state.expiresAt {
+            // RFC 6749 permits a refresh response to omit refresh_token. A newer
+            // access token or expiry therefore proves another resolver completed a
+            // usable refresh even when the durable refresh token is unchanged.
+            return reconciledAtSource
+          }
         }
         let rotated = try await exchange.refresh(state, client: client, now: clock.now)
         // The new record is committed before the old one is discarded. If
@@ -261,14 +284,16 @@ public actor CredentialResolver: CredentialProvider {
             }
           }
         }
-        return rotated
+        return .durable(rotated)
       }
-      // A failed host migration records an undurable barrier for every key
-      // that could still surface its invalidated predecessor. Once any later
-      // refresh is safely durable, retire all aliases for this OAuth client;
-      // clearing only the active key can leave the source-host barrier to
-      // shadow the newer durable destination record in a fresh resolver.
-      await refreshCoordinator.forgetStates(for: recordKeys(for: client.clientID))
+      let rotated = resolution.state
+      // A reused undurable state remains usable by this process, but its
+      // predecessor may still be the only durable record. Retire aliases only
+      // after a replacement was proven durable; otherwise a stale resolver
+      // could erase the recovery barrier without persisting anything.
+      if resolution.isDurable {
+        await refreshCoordinator.forgetStates(for: recordKeys(for: client.clientID))
+      }
       cachedState = rotated
       return rotated
     } catch let failure as RefreshPersistenceFailure {
