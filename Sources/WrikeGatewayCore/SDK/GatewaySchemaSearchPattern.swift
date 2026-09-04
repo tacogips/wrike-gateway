@@ -21,6 +21,7 @@ enum GatewaySchemaSearchPattern {
     var escaped = false
     var previousWasQuantifier = false
     var previousWasGroup = false
+    var hasUnboundedQuantifier = false
     let characters = Array(pattern)
 
     for index in characters.indices {
@@ -68,11 +69,12 @@ enum GatewaySchemaSearchPattern {
         throw GatewayError.validation("Schema search patterns do not support counted quantifiers.")
       }
       if isQuantifier(character) {
-        guard !previousWasQuantifier, !previousWasGroup else {
+        guard !previousWasQuantifier, !previousWasGroup, !hasUnboundedQuantifier else {
           throw GatewayError.validation(
-            "Schema search patterns do not allow nested, repeated, or group quantifiers."
+            "Schema search patterns allow at most one unbounded quantifier."
           )
         }
+        hasUnboundedQuantifier = true
         previousWasQuantifier = true
         previousWasGroup = false
         continue

@@ -64,10 +64,10 @@ the escaped SDL string for readability:
 {"data":{"task":{"id":"IEAAAAAAKQAB5FNY","title":"Prepare launch"}},"extensions":{"requestId":"..."}}
 ```
 
-Schema search accepts a bounded regex subset (at most 256 UTF-8 bytes). Nested,
-repeated, group, and counted quantifiers, lookaround, inline options, and
-backreferences are rejected before catalog matching so a caller-supplied search
-cannot monopolize the process.
+Schema search accepts a bounded regex subset (at most 256 UTF-8 bytes and one
+unbounded quantifier). Nested, repeated, group, and counted quantifiers,
+lookaround, inline options, and backreferences are rejected before catalog
+matching so a caller-supplied search cannot monopolize the process.
 
 A Swift SDK and three capability-scoped command line tools for Wrike API v4.
 

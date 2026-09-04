@@ -69,8 +69,22 @@ struct SDKCommandTests {
     let started = Date()
     let expensive = await frame.run(arguments: ["graphql", "search", "(.+)+Z", "--limit", "1"])
     #expect(expensive.exitCode == .usage)
-    #expect(expensive.standardError.contains("nested"))
+    #expect(expensive.standardError.contains("unbounded quantifier"))
     #expect(Date().timeIntervalSince(started) < 1)
+
+    let overlappingStarted = Date()
+    let overlapping = await frame.run(arguments: [
+      "graphql", "search", ".*.*.*.*.*.*.*.*Z", "--limit", "1"
+    ])
+    #expect(overlapping.exitCode == .usage)
+    #expect(overlapping.standardError.contains("at most one unbounded quantifier"))
+    #expect(Date().timeIntervalSince(overlappingStarted) < 1)
+
+    let oversized = await frame.run(arguments: [
+      "graphql", "search", String(repeating: "a", count: 257), "--limit", "1"
+    ])
+    #expect(oversized.exitCode == .usage)
+    #expect(oversized.standardError.contains("must not exceed 256 UTF-8 bytes"))
 
     let result = await frame.run(arguments: [
       "--pretty", "graphql", "search", "^task$", "--kinds", "query", "--include-referenced-types", "--limit", "2"

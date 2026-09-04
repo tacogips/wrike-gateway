@@ -122,6 +122,16 @@ struct ReaderSDKTests {
     }
 
     #expect(Date().timeIntervalSince(started) < 1)
+
+    let overlappingStarted = Date()
+    #expect(throws: GatewayError.self) {
+      _ = try sdk.searchSchema(".*.*.*.*.*.*.*.*Z", options: .init(limit: 1))
+    }
+    #expect(Date().timeIntervalSince(overlappingStarted) < 1)
+
+    #expect(throws: GatewayError.self) {
+      _ = try sdk.searchSchema(String(repeating: "a", count: 257), options: .init(limit: 1))
+    }
   }
 
   @Test("Facade executions that construct separate runtimes share OAuth refresh")

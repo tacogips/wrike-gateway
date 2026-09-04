@@ -1,6 +1,6 @@
 # Implementation plan: `WrikeGatewaySDK` facade on `GatewaySDKKit`
 
-**Status**: Security remediation implementation committed in `1982392d58c3b0e0314775c5a9efc04cd0b7af2b`, following implementation commit `792c0054f368e0e4a32d8ecd602bf51a9b6c5303`; both follow reviewed revision `92085a37a24b278165abf0a9a80bae7989d750e4` over baseline implementation `bcc2da8e6e9b6ab811e89fe1efb060445c08bf27`. SwiftLint remains externally blocked by SourceKitten framework loading.
+**Status**: Regex safety follow-up verified and pending its authorized commit after security remediation implementation `1982392d58c3b0e0314775c5a9efc04cd0b7af2b`, following implementation commit `792c0054f368e0e4a32d8ecd602bf51a9b6c5303`; both follow reviewed revision `92085a37a24b278165abf0a9a80bae7989d750e4` over baseline implementation `bcc2da8e6e9b6ab811e89fe1efb060445c08bf27`. SwiftLint remains externally blocked by SourceKitten framework loading.
 **Workflow Mode**: `issue-resolution`
 **Workflow Execution**: `codex-design-and-implement-review-loop-session-90`
 **Issue Reference**: `comm-001038`, `Add WrikeGatewaySDK facade on GatewaySDKKit`, branch `feat/gateway-sdk`
@@ -527,3 +527,12 @@ a task complete on code inspection alone when its completion criteria require ex
   remains incomplete solely because SourceKitten aborts before SwiftLint source
   analysis. The completed remediation implementation is committed in
   `1982392d58c3b0e0314775c5a9efc04cd0b7af2b`.
+- 2026-09-04: Step 6 self-review found that the initial regex policy still admitted
+  separated overlapping quantifiers such as `.*.*.*.*.*.*.*.*Z`. The follow-up now
+  allows at most one unbounded quantifier, so that family fails locally in both SDK
+  and CLI search before catalog evaluation; 257-byte inputs also fail locally.
+  Focused `ReaderSDKTests|SDKCommandTests`, explicit arm64 `swift build`, full
+  explicit arm64 `swift test` (`346` tests in `51` suites), and the admin CLI timing
+  probe pass. SwiftLint was retried but SourceKitten again aborted before source
+  analysis; TASK-009 remains incomplete only for that external lint gate. The
+  authorized follow-up commit remains pending.
