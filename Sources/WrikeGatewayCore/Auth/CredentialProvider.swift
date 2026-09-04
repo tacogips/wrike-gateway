@@ -35,6 +35,15 @@ fileprivate struct OAuthDurableState: Sendable {
   let state: OAuthTokenState?
 }
 
+/// A deliberately private transport for a newly issued secret state. It is
+/// never rendered; `CredentialResolver` converts it to a redacted
+/// authentication error after the coordinator has recorded the safe retry
+/// barrier.
+private struct RefreshPersistenceFailure: Error, Sendable {
+  let state: OAuthTokenState
+  let predecessors: [CredentialRecordKey: OAuthTokenState?]
+}
+
 /// Coordinates refresh-token rotation across independently constructed
 /// resolvers that address the same durable credential record.
 public actor OAuthRefreshCoordinator {
@@ -50,8 +59,20 @@ public actor OAuthRefreshCoordinator {
   /// rejects the replacement. Retain that state for the current process so a
   /// fresh facade runtime never resubmits the invalidated predecessor.
   private var undurableStates: [CredentialRecordKey: UndurableState] = [:]
+  /// An internal deterministic test seam. It runs only after a failed refresh
+  /// has published its recovery barrier and while its in-flight task remains
+  /// visible to concurrent resolvers.
+  private let failedPersistencePublicationObserver: (@Sendable () async -> Void)?
 
-  public init() {}
+  public init() {
+    failedPersistencePublicationObserver = nil
+  }
+
+  init(
+    failedPersistencePublicationObserver: @escaping @Sendable () async -> Void
+  ) {
+    self.failedPersistencePublicationObserver = failedPersistencePublicationObserver
+  }
 
   fileprivate func refresh(
     key: CredentialRecordKey,
@@ -60,7 +81,21 @@ public actor OAuthRefreshCoordinator {
     if let task = inFlight[key] {
       return try await task.value
     }
-    let task = Task<OAuthStateResolution, any Error> { try await operation() }
+    let task = Task<OAuthStateResolution, any Error> {
+      do {
+        return try await operation()
+      } catch let failure as RefreshPersistenceFailure {
+        // Publish the replacement before this task can fail. Every awaiter of
+        // the task, including a fresh resolver, therefore observes the barrier
+        // before `inFlight` is cleared and cannot submit the invalidated token.
+        self.rememberUndurable(
+          failure.state,
+          predecessors: failure.predecessors
+        )
+        await self.failedPersistencePublicationObserver?()
+        throw failure
+      }
+    }
     inFlight[key] = task
     defer { inFlight[key] = nil }
     return try await task.value
@@ -112,14 +147,6 @@ public actor OAuthRefreshCoordinator {
       undurableStates.removeValue(forKey: key)
     }
   }
-}
-
-/// A deliberately private transport for a newly issued secret state. It is
-/// never rendered; `CredentialResolver` immediately records the safe retry
-/// barrier and converts it to a redacted authentication error.
-private struct RefreshPersistenceFailure: Error, Sendable {
-  let state: OAuthTokenState
-  let predecessors: [CredentialRecordKey: OAuthTokenState?]
 }
 
 /// Resolves the process credential and owns single-flight refresh.
@@ -334,10 +361,6 @@ public actor CredentialResolver: CredentialProvider {
       cachedState = rotated
       return rotated
     } catch let failure as RefreshPersistenceFailure {
-      await refreshCoordinator.rememberUndurable(
-        failure.state,
-        predecessors: failure.predecessors
-      )
       cachedState = failure.state
       throw GatewayError(
         code: .authenticationFailed,
