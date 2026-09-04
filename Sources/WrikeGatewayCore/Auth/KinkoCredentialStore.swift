@@ -218,8 +218,11 @@ public struct SystemProcessRunner: ConfigurableProcessRunner {
       guard append(collector, data) else {
         handle.readabilityHandler = nil
         handle.closeFile()
-        drain.finish(group)
         completion.outputLimitExceeded()
+        // Record the terminal reason before leaving the group. Otherwise an
+        // exited process can race the final drain callback and resume success
+        // before the output-limit failure is visible.
+        drain.finish(group)
         return
       }
     }
@@ -303,8 +306,6 @@ public struct SystemProcessRunner: ConfigurableProcessRunner {
       let shouldScheduleDrainDeadline = !drainDeadlineScheduled
       drainDeadlineScheduled = true
       lock.unlock()
-      guard hasContinuation else { return }
-      finishAfterStreams()
       if shouldScheduleDrainDeadline {
         DispatchQueue.global(qos: .userInitiated).asyncAfter(
           deadline: .now() + SystemProcessRunner.streamDrainGraceSeconds
@@ -313,6 +314,8 @@ public struct SystemProcessRunner: ConfigurableProcessRunner {
           finish()
         }
       }
+      guard hasContinuation else { return }
+      finishAfterStreams()
     }
 
     private func timeout() {
@@ -325,19 +328,36 @@ public struct SystemProcessRunner: ConfigurableProcessRunner {
 
     private func stop(reason: TerminalReason) {
       lock.lock()
-      if terminalReason == nil { terminalReason = reason }
-      let shouldTerminate = process.isRunning
+      // A timeout or cancellation that arrives after the child has exited
+      // must not relabel a completed command. Wait for the termination handler
+      // rather than resuming the caller with a failure in that race.
+      let ignoresExitedProcess: Bool
+      switch reason {
+      case .cancelled, .timedOut:
+        ignoresExitedProcess = true
+      case .outputLimitExceeded:
+        ignoresExitedProcess = false
+      }
+      guard terminalReason == nil, !(ignoresExitedProcess && (didExit || !process.isRunning)) else {
+        lock.unlock()
+        return
+      }
+      terminalReason = reason
+      let shouldTerminate = !didExit && process.isRunning
+      let alreadyExited = didExit
       lock.unlock()
       closeStreams()
-      finish()
-      guard shouldTerminate else { return }
+      guard shouldTerminate else {
+        if alreadyExited { finishAfterStreams() }
+        return
+      }
       process.terminate()
-      // A process may ignore SIGTERM. Escalate after a brief cleanup grace so
-      // timeout and task cancellation cannot leave a credential operation
-      // indefinitely pending.
+      // A process may ignore SIGTERM. Escalate after a brief cleanup grace.
+      // `finish()` remains gated on `processExited()`, so the caller cannot
+      // resume until the exact child has actually terminated.
       DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.2) { [self] in
         lock.lock()
-        let stillRunning = process.isRunning
+        let stillRunning = !didExit && process.isRunning
         lock.unlock()
         if stillRunning { kill(process.processIdentifier, SIGKILL) }
       }

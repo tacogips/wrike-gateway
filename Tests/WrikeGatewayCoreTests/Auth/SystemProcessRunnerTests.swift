@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import Testing
 import WrikeGatewayCore
 
@@ -11,6 +12,26 @@ struct SystemProcessRunnerTests {
   /// Comfortably larger than the 64 KiB pipe buffer on Darwin, so each stream
   /// blocks its writer unless the reader is draining it concurrently.
   private static let chunkSize = 256 * 1024
+
+  private static func shellQuote(_ value: String) -> String {
+    "'\(value.replacingOccurrences(of: "'", with: "'\\\"'\\\"'"))'"
+  }
+
+  private static func waitForChildPID(at fileURL: URL) async throws -> pid_t {
+    for _ in 0..<100 {
+      if let value = try? String(contentsOf: fileURL, encoding: .utf8)
+        .trimmingCharacters(in: .whitespacesAndNewlines),
+        let rawValue = Int32(value) {
+        return pid_t(rawValue)
+      }
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    throw GatewayError(code: .fileOperationFailed, message: "The test child did not report its process ID.")
+  }
+
+  private static func isRunning(_ pid: pid_t) -> Bool {
+    kill(pid, 0) == 0 || errno == EPERM
+  }
 
   @Test("A child that fills both output pipes and reads a large stdin does not deadlock", .timeLimit(.minutes(1)))
   func concurrentDrainsSurviveFullPipeBuffers() async throws {
@@ -76,48 +97,69 @@ struct SystemProcessRunnerTests {
 
   @Test("A timed-out child is terminated and returns promptly")
   func timeoutTerminatesChild() async throws {
+    let pidFile = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: pidFile) }
     let started = Date()
-    await #expect(throws: GatewayError.self) {
-      _ = try await SystemProcessRunner().run(
+    let task = Task {
+      try await SystemProcessRunner().run(
         executable: "/bin/sh",
-        arguments: ["-c", "trap '' TERM; while :; do :; done"],
+        arguments: ["-c", "echo $$ > \(Self.shellQuote(pidFile.path)); trap '' TERM; while :; do :; done"],
         standardInput: nil,
-        options: ProcessExecutionOptions(timeoutSeconds: 0.05)
+        options: ProcessExecutionOptions(timeoutSeconds: 0.2)
       )
     }
+    let pid = try await Self.waitForChildPID(at: pidFile)
+    await #expect(throws: GatewayError.self) {
+      _ = try await task.value
+    }
     #expect(Date().timeIntervalSince(started) < 3)
+    #expect(!Self.isRunning(pid))
   }
 
   @Test("Cancelling a child process waits for cleanup and returns cancellation")
   func cancellationTerminatesChild() async throws {
     let runner = SystemProcessRunner()
+    let pidFile = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: pidFile) }
     let task = Task {
       try await runner.run(
         executable: "/bin/sh",
-        arguments: ["-c", "trap '' TERM; while :; do :; done"],
+        arguments: ["-c", "echo $$ > \(Self.shellQuote(pidFile.path)); trap '' TERM; while :; do :; done"],
         standardInput: nil,
         options: ProcessExecutionOptions(timeoutSeconds: 5)
       )
     }
-    try await Task.sleep(for: .milliseconds(50))
+    let pid = try await Self.waitForChildPID(at: pidFile)
     task.cancel()
     await #expect(throws: CancellationError.self) {
       _ = try await task.value
     }
+    #expect(!Self.isRunning(pid))
   }
 
-  @Test("Timeout completes when a descendant retains inherited output descriptors")
+  @Test("Timeout terminates a parent despite descendant-held output descriptors")
   func timeoutDoesNotWaitForDescendantEOF() async throws {
     let started = Date()
     await #expect(throws: GatewayError.self) {
       _ = try await SystemProcessRunner().run(
         executable: "/bin/sh",
-        arguments: ["-c", "(sleep 5) & exit 0"],
+        arguments: ["-c", "(sleep 5) & trap '' TERM; while :; do :; done"],
         standardInput: nil,
         options: ProcessExecutionOptions(timeoutSeconds: 0.05)
       )
     }
     #expect(Date().timeIntervalSince(started) < 3)
+  }
+
+  @Test("An exited child is not relabeled by a later timeout")
+  func exitedChildIsNotRelabeledByTimeout() async throws {
+    let result = try await SystemProcessRunner().run(
+      executable: "/bin/sh",
+      arguments: ["-c", "(sleep 1) & exit 0"],
+      standardInput: nil,
+      options: ProcessExecutionOptions(timeoutSeconds: 0.05)
+    )
+    #expect(result.exitCode == 0)
   }
 
   @Test("Output beyond the credential-process limit terminates the child")

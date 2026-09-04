@@ -102,7 +102,13 @@ struct WrikeSchemaCatalogExporterTests {
       definition("thingList", .list(thing)),
       definition("thingPayload", .payload(field: "thing", thing)),
       definition("deleteThing", .deletion),
-      definition("downloadThing", .fileOutput(FileOutputShape.shape))
+      definition("downloadThing", .fileOutput(FileOutputShape.shape)),
+      CapabilityDefinition(
+        id: CapabilityID("things.writerOnly"), field: "writerOnly", tier: .writer,
+        operationClass: .create, method: .post, pathTemplate: "/things",
+        arguments: [], result: .single(ModelShape(typeName: "WriterOnly", fields: [])),
+        scopes: .workspaceReadWrite, summary: "Excluded writer operation."
+      )
     ])
 
     #expect(catalog.validate().isEmpty)
@@ -117,6 +123,12 @@ struct WrikeSchemaCatalogExporterTests {
     #expect(catalog.namedType("ThingPayload") != nil)
     #expect(catalog.namedType("DeletionPayload") != nil)
     #expect(catalog.namedType("DownloadedFile") != nil)
+    #expect(catalog.operation(named: "writerOnly") == nil)
+    #expect(catalog.namedType("WriterOnly") == nil)
+    #expect(catalog.namedType("Thing")?.objectFields?.first(where: { $0.name == "child" })?.type.graphQLString == "Child")
+    #expect(catalog.namedType("Thing")?.objectFields?.first(where: { $0.name == "children" })?.type.graphQLString == "[Child!]")
+    #expect(catalog.namedType("ThingInput")?.inputFields?.first(where: { $0.name == "nested" })?.type.graphQLString == "NestedInput")
+    #expect(catalog.namedType("ThingInput")?.inputFields?.first(where: { $0.name == "weight" })?.type.graphQLString == "Float")
     let single = try #require(catalog.operation(named: "singleThing"))
     #expect(single.arguments.first(where: { $0.name == "ids" })?.type.graphQLString == "[ID!]!")
     #expect(single.arguments.first(where: { $0.name == "id" })?.type.graphQLString == "ID")

@@ -399,8 +399,9 @@ remains mandatory.
 - [x] Catalog/runtime parity and empty catalog validation are proven for every tier.
 - [x] Facade named and raw paths, environment isolation, error mapping, and tier
   divergence are verified through deterministic seams.
-- [x] Existing typed clients, capability definitions, transport/auth policies,
-  packaging, version, and legacy CLI output remain unchanged.
+- [x] Existing typed clients, capability definitions, packaging, version, and
+  legacy CLI output remain unchanged; authorized OAuth reconciliation and
+  credential-process safety revisions are recorded below.
 - [ ] `BinaryBoundaryTests`, full build/test, SwiftLint, whitespace, and file-size gates
   pass.
 - [x] README and plan progress evidence are current.
