@@ -1,6 +1,6 @@
 # Implementation plan: `WrikeGatewaySDK` facade on `GatewaySDKKit`
 
-**Status**: Additional mutation-outcome and OAuth-refresh safety revision pending its authorized commit after regex safety follow-up `711fd1f1a3e13080a387dc92f360a88f52ef0cb3` and security remediation implementation `1982392d58c3b0e0314775c5a9efc04cd0b7af2b`, following implementation commit `792c0054f368e0e4a32d8ecd602bf51a9b6c5303`; all follow reviewed revision `92085a37a24b278165abf0a9a80bae7989d750e4` over baseline implementation `bcc2da8e6e9b6ab811e89fe1efb060445c08bf27`. SwiftLint remains externally blocked by SourceKitten framework loading.
+**Status**: Mutation-outcome and OAuth-refresh safety revision committed in `156a87e05ba13a7422b1dc31cc64161b5da14818` after regex safety follow-up `711fd1f1a3e13080a387dc92f360a88f52ef0cb3` and security remediation implementation `1982392d58c3b0e0314775c5a9efc04cd0b7af2b`, following implementation commit `792c0054f368e0e4a32d8ecd602bf51a9b6c5303`; all follow reviewed revision `92085a37a24b278165abf0a9a80bae7989d750e4` over baseline implementation `bcc2da8e6e9b6ab811e89fe1efb060445c08bf27`. SwiftLint remains externally blocked by SourceKitten framework loading.
 **Workflow Mode**: `issue-resolution`
 **Workflow Execution**: `codex-design-and-implement-review-loop-session-90`
 **Issue Reference**: `comm-001038`, `Add WrikeGatewaySDK facade on GatewaySDKKit`, branch `feat/gateway-sdk`
@@ -543,6 +543,7 @@ a task complete on code inspection alone when its completion criteria require ex
   even when RFC 6749 permits the refresh token to remain unchanged. Writer
   create/update projection, writer/admin cancellation, and staggered
   separate-resolver unrotated-token tests cover the failure paths. Focused
-  verification passed; the authorized safety revision commit is pending. TASK-009
-  remains incomplete solely because SwiftLint source analysis is externally
-  blocked by SourceKitten framework loading.
+  verification passed; the authorized safety revision is committed in
+  `156a87e05ba13a7422b1dc31cc64161b5da14818`. TASK-009 remains incomplete
+  solely because SwiftLint source analysis is externally blocked by SourceKitten
+  framework loading.
