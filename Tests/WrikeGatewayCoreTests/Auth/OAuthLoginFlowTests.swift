@@ -675,6 +675,56 @@ struct OAuthRefreshTests {
     #expect(await transport.requestCount == 1)
   }
 
+  @Test("Destination reauthorization retires a partial migration barrier")
+  func destinationReauthorizationRetiresPartialMigrationBarrier() async throws {
+    let clock = TestClock()
+    let (state, key) = expiredState(clock: clock)
+    let store = InMemoryCredentialStore(seed: [key: state])
+    // The EU destination is written, then www cleanup and its mirror fail.
+    await store.failNextDelete()
+    await store.failWrite(after: 1)
+    let transport = RecordingTransport.succeeding(json: """
+      {"access_token":"fake-rotated-access","refresh_token":"fake-rotated-refresh",\
+      "expires_in":7200,"host":"app-eu.wrike.com"}
+      """)
+    let coordinator = OAuthRefreshCoordinator()
+    let failingResolver = try makeResolver(
+      transport: transport,
+      store: store,
+      clock: clock,
+      refreshCoordinator: coordinator
+    )
+
+    await #expect(throws: GatewayError.self) {
+      _ = try await failingResolver.credential()
+    }
+
+    let destination = CredentialRecordKey(
+      clientID: SecretValue("fake-client-id"),
+      host: "app-eu.wrike.com"
+    )
+    let reauthorized = OAuthTokenState(
+      accessToken: SecretValue("fake-reauthorized-access"),
+      refreshToken: SecretValue("fake-reauthorized-refresh"),
+      expiresAt: clock.now.addingTimeInterval(3600),
+      grantedScopes: ["wsReadOnly"],
+      host: "app-eu.wrike.com",
+      clientID: SecretValue("fake-client-id")
+    )
+    try await store.replace(reauthorized, for: destination)
+
+    let freshResolver = try makeResolver(
+      transport: transport,
+      store: store,
+      clock: clock,
+      refreshCoordinator: coordinator
+    )
+    let fresh = try await freshResolver.credential()
+    #expect(fresh.token == SecretValue("fake-reauthorized-access"))
+    #expect(fresh.baseURL.host == "app-eu.wrike.com")
+    #expect(await transport.requestCount == 1)
+  }
+
   @Test("An undurable reuse by a stale resolver preserves its recovery barrier")
   func staleResolverCannotRetireUndurableBarrierWithoutPersistence() async throws {
     let clock = TestClock()

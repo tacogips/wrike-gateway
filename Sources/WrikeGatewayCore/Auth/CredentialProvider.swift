@@ -308,9 +308,15 @@ public actor CredentialResolver: CredentialProvider {
             do {
               try await store.replace(rotated, for: key)
             } catch {
+              // The destination is already durable even though the source
+              // could not be removed or mirrored. Keep it in this rotation
+              // group so an external reauthorization or deletion there can
+              // retire the source barrier as authoritative.
+              var predecessors: [CredentialRecordKey: OAuthTokenState?] = [key: persistedAtSource]
+              predecessors[destination] = rotated
               throw RefreshPersistenceFailure(
                 state: rotated,
-                predecessors: [key: persistedAtSource]
+                predecessors: predecessors
               )
             }
           }
