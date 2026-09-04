@@ -1,4 +1,5 @@
 import Foundation
+import GatewaySDKKit
 
 /// The captured result of running a command.
 public struct CommandOutcome: Sendable, Equatable {
@@ -34,8 +35,8 @@ public struct RoleDescriptor: Sendable {
 /// validation, output shaping, and exit-code mapping cannot drift between
 /// binaries.
 public struct CommandFrame: Sendable {
-  private let role: RoleDescriptor
-  private let runtime: GraphQLRuntime
+  let role: RoleDescriptor
+  let runtime: GraphQLRuntime
   private let authCommands: AuthCommands
   private let readFile: @Sendable (String) throws -> Data
 
@@ -97,6 +98,18 @@ public struct CommandFrame: Sendable {
         standardError: "",
         exitCode: .success
       )
+    case .graphQLSearch(let pattern, let kinds, let includeReferencedTypes, let limit, let pretty):
+      return try runGraphQLSearch(
+        pattern: pattern,
+        kinds: kinds,
+        includeReferencedTypes: includeReferencedTypes,
+        limit: limit,
+        pretty: pretty
+      )
+    case .graphQLOperation(let name, let variables, let variablesPath, let select, let pretty):
+      let variableData = try variablesPath.map { try readFile($0) } ?? variables
+      let decoded = try Self.decodeVariables(variableData, source: variablesPath == nil ? "--variables" : "--variables-file")
+      return try await runGraphQLOperation(name: name, variables: decoded, select: select, pretty: pretty)
     case .graphQLQuery(let document, let variables, let pretty):
       let decoded = try Self.decodeVariables(variables, source: "--variables")
       return await runGraphQL(document: document, variables: decoded, pretty: pretty)
@@ -120,7 +133,7 @@ public struct CommandFrame: Sendable {
     }
   }
 
-  private func runGraphQL(
+  func runGraphQL(
     document: String,
     variables: [String: WrikeValue],
     pretty: Bool
@@ -149,6 +162,8 @@ public struct CommandFrame: Sendable {
       "  graphql query '<document>' [--variables '<json-object>']",
       "  graphql query-file <path> [--variables-file <path>]",
       "  graphql schema",
+      "  graphql search <regex> [--kinds query,mutation,object,inputObject,enumeration] [--include-referenced-types] [--limit N]",
+      "  graphql operation <name> [--variables '<json-object>' | --variables-file <path>] [--select a.b,c]",
       "  auth oauth2",
       "  auth status",
       "  auth logout",

@@ -1,5 +1,74 @@
 # wrike-gateway
 
+## Client SDK
+
+`GatewaySDKKit` is linked by `WrikeGatewayCore` only; the checked-in local path
+dependency is for development and will be replaced by an operator-owned URL pin.
+Construct the facade from the module that owns the tier you need:
+
+| Tier | Constructor | Product |
+| --- | --- | --- |
+| Reader | `try WrikeGatewaySDK.reader()` | `WrikeGatewayRead` |
+| Writer | `try WrikeGatewaySDK.writer()` | `WrikeGatewayWrite` |
+| Admin | `try WrikeGatewaySDK.admin()` | `WrikeGatewayAdmin` |
+
+```swift
+import GatewaySDKKit
+import WrikeGatewayCore
+import WrikeGatewayRead
+
+let sdk = try WrikeGatewaySDK.reader()
+let catalog = sdk.catalog
+let tasks = try sdk.searchSchema("task")
+let result = await sdk.invoke(
+  GatewayOperationRequest(
+    operation: "task",
+    variables: ["id": .string("IEAAAAAAKQAB5FNY")],
+    selection: .fields(["id", "title"])
+  ),
+  environment: [
+    "WRIKE_GATEWAY_ACCESS_TOKEN": "caller-scoped-token",
+    "WRIKE_GATEWAY_API_BASE_URL": "https://www.wrike.com/api/v4"
+  ]
+)
+```
+
+Use `execute` for a raw GraphQL document. The facade observes only the supplied
+environment map; a reader raw mutation returns `CAPABILITY_DENIED`, while a named
+`invoke` for a non-catalog operation returns the kit's unknown-operation envelope.
+
+```swift
+let raw = await sdk.execute(
+  document: "{ task(id: \"IEAAAAAAKQAB5FNY\") { id title } }",
+  variables: [:],
+  environment: [
+    "WRIKE_GATEWAY_ACCESS_TOKEN": "caller-scoped-token",
+    "WRIKE_GATEWAY_API_BASE_URL": "https://www.wrike.com/api/v4"
+  ]
+)
+```
+
+CLI schema discovery uses the same tier-filtered catalog:
+
+```text
+wrike-gateway-reader graphql search '^task$' --kinds query --limit 1
+wrike-gateway-reader graphql operation task --variables '{"id":"IEAAAAAAKQAB5FNY"}' --select id,title
+```
+
+`graphql search` returns stable, key-sorted local JSON; operation uses the same
+GraphQL response envelope as `graphql query`. The search result below abbreviates
+the escaped SDL string for readability:
+
+```json
+{"count":1,"matches":[{"kind":"query","matchedOn":["name"],"name":"task","sdl":"type Query {...}","tier":"reader"}]}
+{"data":{"task":{"id":"IEAAAAAAKQAB5FNY","title":"Prepare launch"}},"extensions":{"requestId":"..."}}
+```
+
+Schema search accepts a bounded regex subset (at most 256 UTF-8 bytes). Nested,
+repeated, group, and counted quantifiers, lookaround, inline options, and
+backreferences are rejected before catalog matching so a caller-supplied search
+cannot monopolize the process.
+
 A Swift SDK and three capability-scoped command line tools for Wrike API v4.
 
 The public contract is a project-owned GraphQL-shaped schema. Wrike REST paths,

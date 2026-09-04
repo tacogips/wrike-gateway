@@ -1,4 +1,5 @@
 import Foundation
+import GatewaySDKKit
 
 /// The parsed command line, shared by all three executables so grammar cannot
 /// drift between binaries.
@@ -8,12 +9,16 @@ public enum ParsedCommand: Sendable, Equatable {
   case graphQLQuery(document: String, variables: Data?, pretty: Bool)
   case graphQLQueryFile(path: String, variablesPath: String?, pretty: Bool)
   case graphQLSchema
+  case graphQLSearch(pattern: String, kinds: [String]?, includeReferencedTypes: Bool, limit: Int?, pretty: Bool)
+  case graphQLOperation(name: String, variables: Data?, variablesPath: String?, select: [String]?, pretty: Bool)
   case authOAuth2
   case authStatus
   case authLogout
 }
 
 public enum CommandParser {
+  static let graphQLSearchKinds = ["query", "mutation", "object", "inputObject", "enumeration"]
+
   /// Parses arguments. Rejected flags include every override the initial
   /// contract forbids: redirect URI, identity label, certificate, trust bypass,
   /// mock transport, fixture path, and arbitrary host.
@@ -45,6 +50,7 @@ public enum CommandParser {
     var pretty = false
     var positional: [String] = []
     var options: [String: String] = [:]
+    var flags: Set<String> = []
     var index = 0
 
     while index < arguments.count {
@@ -61,9 +67,16 @@ public enum CommandParser {
       case "--version":
         return .version
       case "--pretty":
+        guard !flags.contains(argument) else {
+          throw GatewayError.validation("Option \(argument) is supplied more than once.")
+        }
         pretty = true
-      case "--variables", "--variables-file":
+        flags.insert(argument)
+      case "--variables", "--variables-file", "--kinds", "--limit", "--select":
         guard index + 1 < arguments.count else {
+          throw GatewayError.validation("Option \(argument) requires a value.")
+        }
+        guard !arguments[index + 1].hasPrefix("--") else {
           throw GatewayError.validation("Option \(argument) requires a value.")
         }
         guard options[argument] == nil else {
@@ -71,6 +84,11 @@ public enum CommandParser {
         }
         options[argument] = arguments[index + 1]
         index += 1
+      case "--include-referenced-types":
+        guard !flags.contains(argument) else {
+          throw GatewayError.validation("Option \(argument) is supplied more than once.")
+        }
+        flags.insert(argument)
       default:
         if argument.hasPrefix("-") && argument != "-" {
           throw GatewayError.validation(
@@ -86,9 +104,9 @@ public enum CommandParser {
     guard let command = positional.first else { return .help }
     switch command {
     case "graphql":
-      return try parseGraphQL(Array(positional.dropFirst()), options: options, pretty: pretty)
+      return try parseGraphQL(Array(positional.dropFirst()), options: options, flags: flags, pretty: pretty)
     case "auth":
-      guard options.isEmpty else {
+      guard options.isEmpty, flags.subtracting(["--pretty"]).isEmpty else {
         throw GatewayError.validation("The auth commands do not accept variable options.")
       }
       return try parseAuth(Array(positional.dropFirst()))
@@ -103,6 +121,7 @@ public enum CommandParser {
   private static func parseGraphQL(
     _ positional: [String],
     options: [String: String],
+    flags: Set<String>,
     pretty: Bool
   ) throws -> ParsedCommand {
     guard let subcommand = positional.first else {
@@ -117,15 +136,17 @@ public enum CommandParser {
       guard rest.count == 1, let document = rest.first else {
         throw GatewayError.validation("`graphql query` accepts exactly one document argument.")
       }
+      try validate(options: options, flags: flags, allowed: ["--variables"], command: "graphql query")
       guard options["--variables-file"] == nil else {
         throw GatewayError.validation("`graphql query` uses --variables, not --variables-file.")
       }
-      let variables = try options["--variables"].map { Data($0.utf8) }
+      let variables = options["--variables"].map { Data($0.utf8) }
       return .graphQLQuery(document: document, variables: variables, pretty: pretty)
     case "query-file":
       guard rest.count == 1, let path = rest.first else {
         throw GatewayError.validation("`graphql query-file` accepts exactly one path argument.")
       }
+      try validate(options: options, flags: flags, allowed: ["--variables-file"], command: "graphql query-file")
       guard options["--variables"] == nil else {
         throw GatewayError.validation("`graphql query-file` uses --variables-file, not --variables.")
       }
@@ -135,16 +156,81 @@ public enum CommandParser {
         pretty: pretty
       )
     case "schema":
-      guard rest.isEmpty, options.isEmpty else {
+      guard rest.isEmpty else {
         throw GatewayError.validation("`graphql schema` accepts no additional arguments.")
       }
+      try validate(options: options, flags: flags, allowed: [], command: "graphql schema")
       return .graphQLSchema
+    case "search":
+      guard rest.count == 1, let pattern = rest.first else {
+        throw GatewayError.validation("`graphql search` accepts exactly one regex argument.")
+      }
+      try validate(options: options, flags: flags, allowed: ["--kinds", "--limit", "--include-referenced-types"], command: "graphql search")
+      let kinds = try splitCSV(options["--kinds"], option: "--kinds", allowed: graphQLSearchKinds)
+      let limit: Int?
+      if let raw = options["--limit"] {
+        guard let value = Int(raw), value > 0 else {
+          throw GatewayError.validation("`--limit` must be a positive integer.")
+        }
+        limit = value
+      } else {
+        limit = nil
+      }
+      return .graphQLSearch(
+        pattern: pattern,
+        kinds: kinds,
+        includeReferencedTypes: flags.contains("--include-referenced-types"),
+        limit: limit,
+        pretty: pretty
+      )
+    case "operation":
+      guard rest.count == 1, let name = rest.first else {
+        throw GatewayError.validation("`graphql operation` accepts exactly one operation name.")
+      }
+      try validate(options: options, flags: flags, allowed: ["--variables", "--variables-file", "--select"], command: "graphql operation")
+      guard !(options["--variables"] != nil && options["--variables-file"] != nil) else {
+        throw GatewayError.validation("`graphql operation` accepts either --variables or --variables-file, not both.")
+      }
+      let select = try splitCSV(options["--select"], option: "--select", allowed: nil)
+      return .graphQLOperation(
+        name: name,
+        variables: options["--variables"].map { Data($0.utf8) },
+        variablesPath: options["--variables-file"],
+        select: select,
+        pretty: pretty
+      )
     default:
       throw GatewayError.validation(
         "Unknown graphql subcommand \(subcommand).",
         recovery: "Use `graphql query`, `graphql query-file`, or `graphql schema`."
       )
     }
+  }
+
+  private static func validate(
+    options: [String: String],
+    flags: Set<String>,
+    allowed: Set<String>,
+    command: String
+  ) throws {
+    let used = Set(options.keys).union(flags.subtracting(["--pretty"]))
+    guard used.isSubset(of: allowed) else {
+      throw GatewayError.validation("`\(command)` does not accept \(used.subtracting(allowed).sorted().joined(separator: ", ")).")
+    }
+  }
+
+  private static func splitCSV(_ raw: String?, option: String, allowed: [String]?) throws -> [String]? {
+    guard let raw else { return nil }
+    let values = raw.split(separator: ",", omittingEmptySubsequences: false).map {
+      $0.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    guard !values.isEmpty, values.allSatisfy({ !$0.isEmpty }) else {
+      throw GatewayError.validation("\(option) requires a non-empty comma-separated list.")
+    }
+    if let allowed, !values.allSatisfy({ allowed.contains($0) }) {
+      throw GatewayError.validation("\(option) accepts: \(allowed.sorted().joined(separator: ", ")).")
+    }
+    return Array(Set(values)).sorted()
   }
 
   private static func parseAuth(_ positional: [String]) throws -> ParsedCommand {

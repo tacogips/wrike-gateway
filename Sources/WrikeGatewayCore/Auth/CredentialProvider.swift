@@ -8,6 +8,27 @@ public protocol CredentialProvider: Sendable {
   func refreshedCredential(after stale: ResolvedCredential) async throws -> ResolvedCredential?
 }
 
+/// Coordinates refresh-token rotation across independently constructed
+/// resolvers that address the same durable credential record.
+public actor OAuthRefreshCoordinator {
+  private var inFlight: [CredentialRecordKey: Task<OAuthTokenState, any Error>] = [:]
+
+  public init() {}
+
+  func refresh(
+    key: CredentialRecordKey,
+    operation: @escaping @Sendable () async throws -> OAuthTokenState
+  ) async throws -> OAuthTokenState {
+    if let task = inFlight[key] {
+      return try await task.value
+    }
+    let task = Task<OAuthTokenState, any Error> { try await operation() }
+    inFlight[key] = task
+    defer { inFlight[key] = nil }
+    return try await task.value
+  }
+}
+
 /// Resolves the process credential and owns single-flight refresh.
 ///
 /// Precedence follows `design-authentication.md#resolution-precedence`:
@@ -20,10 +41,7 @@ public actor CredentialResolver: CredentialProvider {
   private let clock: any GatewayClock
   private let hostPolicy: WrikeHostPolicy
   private let exchange: OAuthTokenExchange?
-
-  /// The in-flight refresh, if any. Waiters await this task rather than
-  /// submitting the old refresh token a second time.
-  private var refreshInFlight: Task<OAuthTokenState, any Error>?
+  private let refreshCoordinator: OAuthRefreshCoordinator
   private var cachedState: OAuthTokenState?
 
   public init(
@@ -31,13 +49,15 @@ public actor CredentialResolver: CredentialProvider {
     store: any CredentialStore,
     clock: any GatewayClock = SystemClock(),
     hostPolicy: WrikeHostPolicy = .production,
-    exchange: OAuthTokenExchange? = nil
+    exchange: OAuthTokenExchange? = nil,
+    refreshCoordinator: OAuthRefreshCoordinator = OAuthRefreshCoordinator()
   ) {
     self.environment = environment
     self.store = store
     self.clock = clock
     self.hostPolicy = hostPolicy
     self.exchange = exchange
+    self.refreshCoordinator = refreshCoordinator
   }
 
   public func credential() async throws -> ResolvedCredential {
@@ -114,9 +134,6 @@ public actor CredentialResolver: CredentialProvider {
 
   /// Single-flight refresh. Concurrent callers await one committed result.
   private func refreshState(from state: OAuthTokenState) async throws -> OAuthTokenState {
-    if let existing = refreshInFlight {
-      return try await existing.value
-    }
     guard let exchange else {
       throw GatewayError.authentication(
         "The stored Wrike credential expired and cannot be refreshed in this process.",
@@ -132,18 +149,18 @@ public actor CredentialResolver: CredentialProvider {
 
     let store = self.store
     let clock = self.clock
-    let task = Task<OAuthTokenState, any Error> {
+    let key = CredentialRecordKey(clientID: client.clientID, host: state.host)
+    let rotated = try await refreshCoordinator.refresh(key: key) {
+      if let persisted = try await store.load(key), persisted.refreshToken != state.refreshToken {
+        return persisted
+      }
       let rotated = try await exchange.refresh(state, client: client, now: clock.now)
       // The new record is committed before the old one is discarded; if
       // persistence fails, the process does not claim a successful refresh.
-      let key = CredentialRecordKey(clientID: client.clientID, host: rotated.host)
-      try await store.replace(rotated, for: key)
+      let destination = CredentialRecordKey(clientID: client.clientID, host: rotated.host)
+      try await store.replace(rotated, for: destination)
       return rotated
     }
-    refreshInFlight = task
-    defer { refreshInFlight = nil }
-
-    let rotated = try await task.value
     cachedState = rotated
     return rotated
   }

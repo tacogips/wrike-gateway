@@ -49,6 +49,59 @@ struct CommandGrammarTests {
     #expect(try CommandParser.parse(["auth", "logout"]) == .authLogout)
   }
 
+  @Test("SDK schema commands parse with their isolated options")
+  func sdkCommands() throws {
+    #expect(try CommandParser.parse([
+      "graphql", "search", "task", "--kinds", "query,object", "--limit", "2"
+    ]) == .graphQLSearch(
+      pattern: "task", kinds: ["object", "query"], includeReferencedTypes: false, limit: 2, pretty: false
+    ))
+    #expect(try CommandParser.parse([
+      "graphql", "operation", "task", "--variables", "{\"id\":\"x\"}", "--select", "id,title"
+    ]) == .graphQLOperation(
+      name: "task", variables: Data("{\"id\":\"x\"}".utf8), variablesPath: nil, select: ["id", "title"], pretty: false
+    ))
+    #expect(throws: GatewayError.self) {
+      _ = try CommandParser.parse(["graphql", "schema", "--kinds", "query"])
+    }
+    for unsupported in ["command", "scalar"] {
+      #expect(throws: GatewayError.self) {
+        _ = try CommandParser.parse(["graphql", "search", "task", "--kinds", unsupported])
+      }
+    }
+  }
+
+  static let sdkUsageErrors: [(String, [String])] = [
+    ("duplicate search kind", ["graphql", "search", "task", "--kinds", "query", "--kinds", "object"]),
+    ("duplicate search limit", ["graphql", "search", "task", "--limit", "1", "--limit", "2"]),
+    ("duplicate referenced types", ["graphql", "search", "task", "--include-referenced-types", "--include-referenced-types"]),
+    ("missing search kinds", ["graphql", "search", "task", "--kinds"]),
+    ("missing search limit", ["graphql", "search", "task", "--limit"]),
+    ("empty search kinds", ["graphql", "search", "task", "--kinds", "query,"]),
+    ("unknown search kind", ["graphql", "search", "task", "--kinds", "unknown"]),
+    ("non-positive search limit", ["graphql", "search", "task", "--limit", "0"]),
+    ("invalid search limit", ["graphql", "search", "task", "--limit", "many"]),
+    ("irrelevant search select", ["graphql", "search", "task", "--select", "id"]),
+    ("extra search positional", ["graphql", "search", "task", "extra"]),
+    ("mutually exclusive operation variables", ["graphql", "operation", "task", "--variables", "{}", "--variables-file", "/tmp/v"]),
+    ("duplicate operation variables", ["graphql", "operation", "task", "--variables", "{}", "--variables", "{}"]),
+    ("duplicate operation variable file", ["graphql", "operation", "task", "--variables-file", "/tmp/a", "--variables-file", "/tmp/b"]),
+    ("missing operation variables", ["graphql", "operation", "task", "--variables"]),
+    ("missing operation variable file", ["graphql", "operation", "task", "--variables-file"]),
+    ("duplicate operation selection", ["graphql", "operation", "task", "--select", "id", "--select", "title"]),
+    ("missing operation selection", ["graphql", "operation", "task", "--select"]),
+    ("empty operation selection", ["graphql", "operation", "task", "--select", "id,"]),
+    ("irrelevant operation limit", ["graphql", "operation", "task", "--limit", "1"]),
+    ("extra operation positional", ["graphql", "operation", "task", "extra"])
+  ]
+
+  @Test("SDK command grammar rejects every option-boundary error", arguments: sdkUsageErrors)
+  func rejectsSDKUsageErrors(name: String, arguments: [String]) {
+    #expect(throws: GatewayError.self) {
+      _ = try CommandParser.parse(arguments)
+    }
+  }
+
   static let usageErrors: [(String, [String])] = [
     ("unknown command", ["frobnicate"]),
     ("unknown subcommand", ["graphql", "introspect"]),

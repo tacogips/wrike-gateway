@@ -27,8 +27,13 @@ let package = Package(
     .executable(name: "wrike-gateway-writer", targets: ["WrikeGatewayWriterCLI"]),
     .executable(name: "wrike-gateway-admin", targets: ["WrikeGatewayAdminCLI"])
   ],
+  // Development-only local path; an operator replaces this with a URL pin later.
+  dependencies: [.package(path: "../../gateway-sdk-kit")],
   targets: [
-    .target(name: "WrikeGatewayCore"),
+    .target(
+      name: "WrikeGatewayCore",
+      dependencies: [.product(name: "GatewaySDKKit", package: "gateway-sdk-kit")]
+    ),
     .target(name: "WrikeGatewayRead", dependencies: ["WrikeGatewayCore"]),
     .target(name: "WrikeGatewayWrite", dependencies: ["WrikeGatewayCore", "WrikeGatewayRead"]),
     .target(
