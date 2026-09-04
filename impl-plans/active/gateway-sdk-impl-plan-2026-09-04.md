@@ -1,6 +1,6 @@
 # Implementation plan: `WrikeGatewaySDK` facade on `GatewaySDKKit`
 
-**Status**: Credential-process and OAuth-durability safety revisions committed in `666c8b4ee355e19ace2c5564f98277af695b8611` and `8670d86b580527bf31a42cab16eb0c9922f84a03` after mutation-outcome and OAuth-refresh safety revision `156a87e05ba13a7422b1dc31cc64161b5da14818`, regex safety follow-up `711fd1f1a3e13080a387dc92f360a88f52ef0cb3`, and security remediation implementation `1982392d58c3b0e0314775c5a9efc04cd0b7af2b`; all follow reviewed revision `92085a37a24b278165abf0a9a80bae7989d750e4` over baseline implementation `bcc2da8e6e9b6ab811e89fe1efb060445c08bf27`. SwiftLint remains externally blocked by SourceKitten framework loading.
+**Status**: Facade-specific credential isolation and OAuth host-migration safety revision committed in `353d4c32b5b2cf2ce5f6e924e4b4189aa63a46ab` after credential-process and OAuth-durability revisions `666c8b4ee355e19ace2c5564f98277af695b8611` and `8670d86b580527bf31a42cab16eb0c9922f84a03`, mutation-outcome and OAuth-refresh safety revision `156a87e05ba13a7422b1dc31cc64161b5da14818`, regex safety follow-up `711fd1f1a3e13080a387dc92f360a88f52ef0cb3`, and security remediation implementation `1982392d58c3b0e0314775c5a9efc04cd0b7af2b`; all follow reviewed revision `92085a37a24b278165abf0a9a80bae7989d750e4` over baseline implementation `bcc2da8e6e9b6ab811e89fe1efb060445c08bf27`. SwiftLint remains externally blocked by SourceKitten framework loading.
 **Workflow Mode**: `issue-resolution`
 **Workflow Execution**: `codex-design-and-implement-review-loop-session-90`
 **Issue Reference**: `comm-001038`, `Add WrikeGatewaySDK facade on GatewaySDKKit`, branch `feat/gateway-sdk`
@@ -574,3 +574,18 @@ a task complete on code inspection alone when its completion criteria require ex
   no longer relabel an already completed command as timed out. The focused
   `SystemProcessRunnerTests` rerun passed six tests; TASK-009 remains blocked
   only by the recorded external SwiftLint/SourceKitten failure.
+- 2026-09-04: Step 6 self-review found that global PATH removal changed the
+  accepted CLI kinko-resolution contract and that a failed host-predecessor
+  delete could leave a fresh resolver selecting an invalidated token. Revision
+  `353d4c32b5b2cf2ce5f6e924e4b4189aa63a46ab` now preserves PATH discovery and
+  inherited child environment for CLI composition, while the SDK facade selects
+  a separate restricted credential-store context with trusted absolute paths
+  and only `HOME`/`LC_ALL`. A production-composition seam and focused facade
+  regression prove that the facade selects this isolated context. On failed
+  host-predecessor cleanup, the rotated state is mirrored to the predecessor;
+  a failed mirror is an explicit durability barrier. Reconciliation also
+  compares refresh tokens. Focused explicit-arm64 `swift test --filter
+  'KinkoCredentialStoreContractTests|KinkoExecutableResolverTests|OAuthRefreshTests|ReaderSDKTests'`
+  passed `46` tests; explicit-arm64 `swift build` and full `swift test` passed
+  `360` tests in `51` suites. TASK-009 remains incomplete solely because
+  SourceKitten blocks SwiftLint before source analysis.
