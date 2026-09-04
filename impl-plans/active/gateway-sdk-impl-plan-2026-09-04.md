@@ -1,6 +1,6 @@
 # Implementation plan: `WrikeGatewaySDK` facade on `GatewaySDKKit`
 
-**Status**: Security remediation revision in progress after implementation commit `792c0054f368e0e4a32d8ecd602bf51a9b6c5303`; it follows reviewed revision `92085a37a24b278165abf0a9a80bae7989d750e4` over baseline implementation `bcc2da8e6e9b6ab811e89fe1efb060445c08bf27`. SwiftLint remains externally blocked by SourceKitten framework loading.
+**Status**: Security remediation implementation committed in `1982392d58c3b0e0314775c5a9efc04cd0b7af2b`, following implementation commit `792c0054f368e0e4a32d8ecd602bf51a9b6c5303`; both follow reviewed revision `92085a37a24b278165abf0a9a80bae7989d750e4` over baseline implementation `bcc2da8e6e9b6ab811e89fe1efb060445c08bf27`. SwiftLint remains externally blocked by SourceKitten framework loading.
 **Workflow Mode**: `issue-resolution`
 **Workflow Execution**: `codex-design-and-implement-review-loop-session-90`
 **Issue Reference**: `comm-001038`, `Add WrikeGatewaySDK facade on GatewaySDKKit`, branch `feat/gateway-sdk`
@@ -525,4 +525,5 @@ a task complete on code inspection alone when its completion criteria require ex
   separate-runtime OAuth concurrency coverage, writer/admin mutation transport-failure
   assertions, selection omission, and option-value validation coverage. TASK-009
   remains incomplete solely because SourceKitten aborts before SwiftLint source
-  analysis; full verification evidence and this revision's final commit follow.
+  analysis. The completed remediation implementation is committed in
+  `1982392d58c3b0e0314775c5a9efc04cd0b7af2b`.
