@@ -212,10 +212,12 @@ public struct SystemProcessRunner: ConfigurableProcessRunner {
 
     private func stop(reason: TerminalReason) {
       lock.lock()
+      guard process.isRunning else {
+        lock.unlock()
+        return
+      }
       if terminalReason == nil { terminalReason = reason }
-      let shouldTerminate = process.isRunning
       lock.unlock()
-      guard shouldTerminate else { return }
       process.terminate()
       // A process may ignore SIGTERM. Escalate after a brief cleanup grace so
       // timeout and task cancellation cannot leave a credential operation
