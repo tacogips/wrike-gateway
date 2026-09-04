@@ -603,3 +603,15 @@ a task complete on code inspection alone when its completion criteria require ex
   `swift build`, and full explicit-arm64 `swift test` passed (`363` tests in
   `51` suites). TASK-009 remains incomplete solely because SwiftLint source
   analysis is externally blocked by SourceKitten framework loading.
+- 2026-09-04: Step 6 self-review found that a successfully recovered
+  cross-host refresh cleared only its destination alias, leaving the original
+  source-host undurable barrier able to win a later fresh-resolver expiry
+  comparison. Follow-up `8d57ef62d4634aa2c00433457a6511565757ff12` now retires
+  every approved-host barrier for the OAuth client after a safe durable
+  refresh, logout, or authorization commit. The deterministic regression
+  covers failed www-to-EU persistence, a shorter-lived durable EU recovery,
+  and a fresh resolver choosing that durable state over the longer-lived stale
+  source alias. Focused explicit-arm64 `swift test --filter OAuthRefreshTests`
+  and full explicit-arm64 `swift test` pass (`364` tests in `51` suites).
+  TASK-009 remains incomplete solely because SwiftLint source analysis is
+  externally blocked by SourceKitten framework loading.
