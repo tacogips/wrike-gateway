@@ -615,3 +615,15 @@ a task complete on code inspection alone when its completion criteria require ex
   and full explicit-arm64 `swift test` pass (`364` tests in `51` suites).
   TASK-009 remains incomplete solely because SwiftLint source analysis is
   externally blocked by SourceKitten framework loading.
+- 2026-09-04: A follow-up Step 6 self-review found that a stale resolver could
+  reuse an undurable coordinator result without a credential-store write, then
+  incorrectly retire its recovery barrier. The follow-up records refresh
+  provenance as durable or undurable and retires approved-host aliases only
+  after a proven durable replacement. The deterministic regression pre-caches
+  the durable predecessor, simulates a rotated-token persistence failure, then
+  exercises the stale and a fresh resolver; both retain and use the undurable
+  replacement without resubmitting the invalidated predecessor. Focused
+  explicit-arm64 `swift test --filter OAuthRefreshTests`, explicit-arm64
+  `swift build`, and full explicit-arm64 `swift test` passed (`365` tests in
+  `51` suites). TASK-009 remains incomplete solely because SwiftLint source
+  analysis is externally blocked by SourceKitten framework loading.
