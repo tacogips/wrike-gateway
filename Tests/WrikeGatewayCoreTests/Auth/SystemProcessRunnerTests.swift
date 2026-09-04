@@ -1,7 +1,7 @@
 import Foundation
 import Darwin
 import Testing
-import WrikeGatewayCore
+@testable import WrikeGatewayCore
 
 /// The process seam the credential store runs kinko through.
 ///
@@ -31,6 +31,75 @@ struct SystemProcessRunnerTests {
 
   private static func isRunning(_ pid: pid_t) -> Bool {
     kill(pid, 0) == 0 || errno == EPERM
+  }
+
+  private final class ManualTimeoutScheduler: @unchecked Sendable {
+    private let lock = NSLock()
+    private var action: (@Sendable () -> Void)?
+    private var scheduledContinuation: CheckedContinuation<Void, Never>?
+
+    func schedule(after _: Double, action: @escaping @Sendable () -> Void) {
+      lock.lock()
+      self.action = action
+      let continuation = scheduledContinuation
+      scheduledContinuation = nil
+      lock.unlock()
+      continuation?.resume()
+    }
+
+    func waitUntilScheduled() async {
+      await withCheckedContinuation { continuation in
+        lock.lock()
+        if action == nil {
+          scheduledContinuation = continuation
+          lock.unlock()
+        } else {
+          lock.unlock()
+          continuation.resume()
+        }
+      }
+    }
+
+    func fire() {
+      lock.lock()
+      let action = action
+      lock.unlock()
+      action?()
+    }
+  }
+
+  private final class ProcessExitGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private let release = DispatchSemaphore(value: 0)
+    private var didObserveExit = false
+    private var exitContinuation: CheckedContinuation<Void, Never>?
+
+    func observeAndWait() {
+      lock.lock()
+      didObserveExit = true
+      let continuation = exitContinuation
+      exitContinuation = nil
+      lock.unlock()
+      continuation?.resume()
+      release.wait()
+    }
+
+    func waitUntilExitObserved() async {
+      await withCheckedContinuation { continuation in
+        lock.lock()
+        if didObserveExit {
+          lock.unlock()
+          continuation.resume()
+        } else {
+          exitContinuation = continuation
+          lock.unlock()
+        }
+      }
+    }
+
+    func allowExitHandling() {
+      release.signal()
+    }
   }
 
   @Test("A child that fills both output pipes and reads a large stdin does not deadlock", .timeLimit(.minutes(1)))
@@ -153,12 +222,25 @@ struct SystemProcessRunnerTests {
 
   @Test("An exited child is not relabeled by a later timeout")
   func exitedChildIsNotRelabeledByTimeout() async throws {
-    let result = try await SystemProcessRunner().run(
-      executable: "/bin/sh",
-      arguments: ["-c", "(sleep 1) & exit 0"],
-      standardInput: nil,
-      options: ProcessExecutionOptions(timeoutSeconds: 0.05)
+    let scheduler = ManualTimeoutScheduler()
+    let exitGate = ProcessExitGate()
+    let runner = SystemProcessRunner(
+      timeoutScheduler: { seconds, action in scheduler.schedule(after: seconds, action: action) },
+      processExitObserver: { exitGate.observeAndWait() }
     )
+    let task = Task {
+      try await runner.run(
+        executable: "/bin/sh",
+        arguments: ["-c", "exit 0"],
+        standardInput: nil,
+        options: ProcessExecutionOptions(timeoutSeconds: 60)
+      )
+    }
+    await scheduler.waitUntilScheduled()
+    await exitGate.waitUntilExitObserved()
+    scheduler.fire()
+    exitGate.allowExitHandling()
+    let result = try await task.value
     #expect(result.exitCode == 0)
   }
 

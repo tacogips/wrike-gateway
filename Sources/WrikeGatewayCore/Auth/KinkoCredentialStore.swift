@@ -58,11 +58,16 @@ public struct ProcessResult: Sendable, Equatable {
   }
 }
 
+typealias ProcessTimeoutScheduler = @Sendable (Double, @escaping @Sendable () -> Void) -> Void
+typealias ProcessExitObserver = @Sendable () -> Void
+
 public struct SystemProcessRunner: ConfigurableProcessRunner {
   /// Credential-store diagnostics are never expected to be large. Bounding
   /// both streams prevents an untrusted child from consuming host memory.
   public static let maximumOutputBytes = 1_048_576
   private static let streamDrainGraceSeconds = 0.2
+  private let timeoutScheduler: ProcessTimeoutScheduler
+  private let processExitObserver: ProcessExitObserver
 
   /// Collects the two output streams that are drained on separate threads.
   private final class StreamCollector: @unchecked Sendable {
@@ -108,7 +113,20 @@ public struct SystemProcessRunner: ConfigurableProcessRunner {
     }
   }
 
-  public init() {}
+  public init() {
+    timeoutScheduler = { seconds, action in
+      DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + seconds, execute: action)
+    }
+    processExitObserver = {}
+  }
+
+  init(
+    timeoutScheduler: @escaping ProcessTimeoutScheduler,
+    processExitObserver: @escaping ProcessExitObserver = {}
+  ) {
+    self.timeoutScheduler = timeoutScheduler
+    self.processExitObserver = processExitObserver
+  }
 
   public func run(executable: String, arguments: [String], standardInput: Data?) async throws -> ProcessResult {
     try await run(
@@ -147,6 +165,7 @@ public struct SystemProcessRunner: ConfigurableProcessRunner {
       process: process,
       collector: collector,
       streamGroup: group,
+      processExitObserver: processExitObserver,
       closeStreams: {
         inputHandle?.closeFile()
         outputPipe.fileHandleForReading.closeFile()
@@ -196,7 +215,10 @@ public struct SystemProcessRunner: ConfigurableProcessRunner {
       },
       completion: completion
     )
-    return try await completion.wait(timeoutSeconds: options.timeoutSeconds, queue: queue)
+    return try await completion.wait(
+      timeoutSeconds: options.timeoutSeconds,
+      timeoutScheduler: timeoutScheduler
+    )
   }
 
   private func installDrain(
@@ -234,6 +256,7 @@ public struct SystemProcessRunner: ConfigurableProcessRunner {
     private let process: Process
     private let collector: StreamCollector
     private let streamGroup: DispatchGroup
+    private let processExitObserver: ProcessExitObserver
     private let closeStreams: @Sendable () -> Void
     private let lock = NSLock()
     private var continuation: CheckedContinuation<ProcessResult, any Error>?
@@ -253,20 +276,25 @@ public struct SystemProcessRunner: ConfigurableProcessRunner {
       process: Process,
       collector: StreamCollector,
       streamGroup: DispatchGroup,
+      processExitObserver: @escaping ProcessExitObserver,
       closeStreams: @escaping @Sendable () -> Void
     ) {
       self.process = process
       self.collector = collector
       self.streamGroup = streamGroup
+      self.processExitObserver = processExitObserver
       self.closeStreams = closeStreams
     }
 
-    func wait(timeoutSeconds: Double?, queue: DispatchQueue) async throws -> ProcessResult {
+    func wait(
+      timeoutSeconds: Double?,
+      timeoutScheduler: @escaping ProcessTimeoutScheduler
+    ) async throws -> ProcessResult {
       try await withTaskCancellationHandler {
         try await withCheckedThrowingContinuation { continuation in
           install(continuation: continuation)
           if let timeoutSeconds {
-            scheduleTimeout(after: timeoutSeconds, queue: queue)
+            scheduleTimeout(after: timeoutSeconds, using: timeoutScheduler)
           }
         }
       } onCancel: {
@@ -287,12 +315,12 @@ public struct SystemProcessRunner: ConfigurableProcessRunner {
       }
     }
 
-    func scheduleTimeout(after seconds: Double, queue: DispatchQueue) {
+    func scheduleTimeout(after seconds: Double, using scheduler: ProcessTimeoutScheduler) {
       guard seconds > 0 else {
         timeout()
         return
       }
-      queue.asyncAfter(deadline: .now() + seconds) { [self] in timeout() }
+      scheduler(seconds) { [self] in timeout() }
     }
 
     func cancel() {
@@ -306,6 +334,9 @@ public struct SystemProcessRunner: ConfigurableProcessRunner {
       let shouldScheduleDrainDeadline = !drainDeadlineScheduled
       drainDeadlineScheduled = true
       lock.unlock()
+      // The test seam runs after this state transition, so a queued timeout
+      // can be exercised deterministically after exit is authoritative.
+      processExitObserver()
       if shouldScheduleDrainDeadline {
         DispatchQueue.global(qos: .userInitiated).asyncAfter(
           deadline: .now() + SystemProcessRunner.streamDrainGraceSeconds
