@@ -366,7 +366,8 @@ struct OAuthRefreshTests {
   private func makeResolver(
     transport: RecordingTransport,
     store: InMemoryCredentialStore,
-    clock: TestClock
+    clock: TestClock,
+    refreshCoordinator: OAuthRefreshCoordinator = OAuthRefreshCoordinator()
   ) throws -> CredentialResolver {
     CredentialResolver(
       environment: StaticEnvironmentReader([
@@ -378,7 +379,8 @@ struct OAuthRefreshTests {
       exchange: try OAuthTokenExchange(
         transport: transport,
         tokenURL: URL(string: WrikeOAuthEndpoints.tokenURL)
-      )
+      ),
+      refreshCoordinator: refreshCoordinator
     )
   }
 
@@ -431,6 +433,38 @@ struct OAuthRefreshTests {
     _ = try await (first, second, third)
 
     #expect(await transport.requestCount == 1, "The old refresh token must be submitted once")
+  }
+
+  @Test("A stale resolver reuses a committed refresh that keeps the refresh token")
+  func staggeredResolversReuseUnrotatedRefresh() async throws {
+    let clock = TestClock()
+    let (state, key) = expiredState(clock: clock)
+    let store = InMemoryCredentialStore(seed: [key: state])
+    let transport = RecordingTransport.succeeding(json: """
+      {"access_token":"fake-new-access","expires_in":3600,"host":"www.wrike.com"}
+      """)
+    let coordinator = OAuthRefreshCoordinator()
+    let leader = try makeResolver(
+      transport: transport,
+      store: store,
+      clock: clock,
+      refreshCoordinator: coordinator
+    )
+    let follower = try makeResolver(
+      transport: transport,
+      store: store,
+      clock: clock,
+      refreshCoordinator: coordinator
+    )
+
+    // Cache the old state in a separate facade-created resolver before the
+    // leader commits an RFC 6749-valid response without refresh_token.
+    _ = try await follower.status()
+    _ = try await leader.credential()
+    let reused = try await follower.credential()
+
+    #expect(reused.token == SecretValue("fake-new-access"))
+    #expect(await transport.requestCount == 1)
   }
 
   @Test("A failed persistence does not claim a successful refresh")

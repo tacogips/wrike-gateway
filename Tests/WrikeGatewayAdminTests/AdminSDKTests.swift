@@ -92,4 +92,32 @@ struct AdminSDKTests {
     #expect(response.requestId == "admin-sdk-request")
     #expect(await transport.requestCount == 1)
   }
+
+  @Test("Admin facade marks a cancelled delete as outcome unknown")
+  func deleteCancellationPreservesRecoveryMetadata() async throws {
+    let transport = RecordingTransport(outcomes: [.failure(.cancelled)])
+    let runtime = GraphQLRuntime(
+      executor: CapabilityExecutor(
+        planner: CapabilityPlanner(registry: try AdminCapabilities.registry()),
+        transport: transport,
+        credentials: StubCredentialProvider(),
+        clock: TestClock()
+      ),
+      requestIDFactory: { "admin-sdk-request" }
+    )
+    let sdk = try WrikeGatewaySDK(role: .admin, definitions: AdminCapabilities.all, makeRuntime: { _ in runtime })
+
+    let response = await sdk.invoke(
+      GatewayOperationRequest(operation: "deleteTask", variables: [
+        "input": .object(["taskId": .string("IEAAAAAAKQAB5FNY")])
+      ]),
+      environment: [:]
+    )
+
+    let error = try #require(response.errors.first)
+    #expect(error.code == "TRANSPORT_FAILED_OUTCOME_UNKNOWN")
+    #expect(error.message.contains("Confirm the current state in Wrike before retrying."))
+    #expect(response.rawOutput.contains("\"outcomeUnknown\":true"))
+    #expect(await transport.requestCount == 1)
+  }
 }

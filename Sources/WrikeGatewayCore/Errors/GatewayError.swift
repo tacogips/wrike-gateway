@@ -93,6 +93,22 @@ public struct GatewayError: Error, Sendable, Equatable {
       recoveryGuidance: recoveryGuidance
     )
   }
+
+  /// Marks an operation as potentially applied when its request crossed the
+  /// network boundary but its result cannot be confirmed safely.
+  public func markingOutcomeUnknown(recoveryGuidance: String) -> GatewayError {
+    GatewayError(
+      code: code,
+      message: message,
+      requestID: requestID,
+      httpStatus: httpStatus,
+      capabilityID: capabilityID,
+      requiredTier: requiredTier,
+      outcomeUnknown: true,
+      retryAfterSeconds: retryAfterSeconds,
+      recoveryGuidance: recoveryGuidance
+    )
+  }
 }
 
 extension GatewayError: CustomStringConvertible {

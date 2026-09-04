@@ -7,6 +7,9 @@ import Foundation
 /// `CapabilityPlan` produced by `CapabilityPlanner`, neither can select a
 /// different capability, adapter, validation outcome, or error mapping.
 public struct CapabilityExecutor: Sendable {
+  private static let unknownOutcomeRecovery =
+    "The request was not automatically retried. Confirm the current state in Wrike before retrying."
+
   public let planner: CapabilityPlanner
   private let transport: any WrikeTransport
   private let credentials: any CredentialProvider
@@ -68,7 +71,14 @@ public struct CapabilityExecutor: Sendable {
         validatedDeletionIdentifier: plan.validatedDeletionIdentifier
       )
     } catch let error as GatewayError {
-      throw error.withContext(requestID: requestID, capabilityID: plan.capabilityID)
+      let contextual = error.withContext(requestID: requestID, capabilityID: plan.capabilityID)
+      guard !plan.request.method.isAutomaticallyRetryable else {
+        throw contextual
+      }
+      // A 2xx response proves the request reached Wrike, not that the gateway
+      // can project a compatible confirmation. Retrying a create, update, or
+      // delete after a projection failure can duplicate an applied mutation.
+      throw contextual.markingOutcomeUnknown(recoveryGuidance: Self.unknownOutcomeRecovery)
     }
   }
 
@@ -168,16 +178,16 @@ public struct CapabilityExecutor: Sendable {
         capabilityID: plan.capabilityID
       )
     }
-    let outcomeUnknown = !plan.request.method.isAutomaticallyRetryable && failure != .cancelled
+    // A cancellation delivered by the transport occurs after dispatch. It does
+    // not prove Wrike did not receive or apply a non-idempotent request.
+    let outcomeUnknown = !plan.request.method.isAutomaticallyRetryable
     return GatewayError(
       code: .transportFailed,
       message: failure.safeSummary,
       requestID: requestID,
       capabilityID: plan.capabilityID,
       outcomeUnknown: outcomeUnknown,
-      recoveryGuidance: outcomeUnknown
-        ? "The request was not automatically retried. Confirm the current state in Wrike before retrying."
-        : nil
+      recoveryGuidance: outcomeUnknown ? Self.unknownOutcomeRecovery : nil
     )
   }
 

@@ -1,6 +1,6 @@
 # Implementation plan: `WrikeGatewaySDK` facade on `GatewaySDKKit`
 
-**Status**: Regex safety follow-up committed in `711fd1fba1c95febce0aeb4c2424968d672ceadc` after security remediation implementation `1982392d58c3b0e0314775c5a9efc04cd0b7af2b`, following implementation commit `792c0054f368e0e4a32d8ecd602bf51a9b6c5303`; all follow reviewed revision `92085a37a24b278165abf0a9a80bae7989d750e4` over baseline implementation `bcc2da8e6e9b6ab811e89fe1efb060445c08bf27`. SwiftLint remains externally blocked by SourceKitten framework loading.
+**Status**: Additional mutation-outcome and OAuth-refresh safety revision pending its authorized commit after regex safety follow-up `711fd1f1a3e13080a387dc92f360a88f52ef0cb3` and security remediation implementation `1982392d58c3b0e0314775c5a9efc04cd0b7af2b`, following implementation commit `792c0054f368e0e4a32d8ecd602bf51a9b6c5303`; all follow reviewed revision `92085a37a24b278165abf0a9a80bae7989d750e4` over baseline implementation `bcc2da8e6e9b6ab811e89fe1efb060445c08bf27`. SwiftLint remains externally blocked by SourceKitten framework loading.
 **Workflow Mode**: `issue-resolution`
 **Workflow Execution**: `codex-design-and-implement-review-loop-session-90`
 **Issue Reference**: `comm-001038`, `Add WrikeGatewaySDK facade on GatewaySDKKit`, branch `feat/gateway-sdk`
@@ -535,4 +535,14 @@ a task complete on code inspection alone when its completion criteria require ex
   explicit arm64 `swift test` (`346` tests in `51` suites), and the admin CLI timing
   probe pass. SwiftLint was retried but SourceKitten again aborted before source
   analysis; TASK-009 remains incomplete only for that external lint gate. The
-  authorized follow-up is committed in `711fd1fba1c95febce0aeb4c2424968d672ceadc`.
+  authorized follow-up is committed in `711fd1f1a3e13080a387dc92f360a88f52ef0cb3`.
+- 2026-09-04: Adversarial-review follow-up marks all non-idempotent post-2xx
+  response-projection failures and dispatched-request cancellations as outcome
+  unknown with stable recovery guidance before the SDK facade maps them. OAuth
+  refresh reconciliation now reuses a newer persisted access token or expiry
+  even when RFC 6749 permits the refresh token to remain unchanged. Writer
+  create/update projection, writer/admin cancellation, and staggered
+  separate-resolver unrotated-token tests cover the failure paths. Focused
+  verification passed; the authorized safety revision commit is pending. TASK-009
+  remains incomplete solely because SwiftLint source analysis is externally
+  blocked by SourceKitten framework loading.

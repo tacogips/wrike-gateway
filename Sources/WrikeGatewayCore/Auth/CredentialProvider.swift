@@ -151,7 +151,11 @@ public actor CredentialResolver: CredentialProvider {
     let clock = self.clock
     let key = CredentialRecordKey(clientID: client.clientID, host: state.host)
     let rotated = try await refreshCoordinator.refresh(key: key) {
-      if let persisted = try await store.load(key), persisted.refreshToken != state.refreshToken {
+      if let persisted = try await store.load(key),
+         persisted.accessToken != state.accessToken || persisted.expiresAt > state.expiresAt {
+        // RFC 6749 permits a refresh response to omit refresh_token. A newer
+        // access token or expiry therefore proves another resolver completed a
+        // usable refresh even when the durable refresh token is unchanged.
         return persisted
       }
       let rotated = try await exchange.refresh(state, client: client, now: clock.now)
