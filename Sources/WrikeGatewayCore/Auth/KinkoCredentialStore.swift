@@ -59,28 +59,52 @@ public struct ProcessResult: Sendable, Equatable {
 }
 
 public struct SystemProcessRunner: ConfigurableProcessRunner {
+  /// Credential-store diagnostics are never expected to be large. Bounding
+  /// both streams prevents an untrusted child from consuming host memory.
+  public static let maximumOutputBytes = 1_048_576
+  private static let streamDrainGraceSeconds = 0.2
+
   /// Collects the two output streams that are drained on separate threads.
   private final class StreamCollector: @unchecked Sendable {
     private let lock = NSLock()
     private var output = Data()
     private var errorOutput = Data()
 
-    func setOutput(_ data: Data) {
+    func appendOutput(_ data: Data, maximumBytes: Int) -> Bool {
       lock.lock()
       defer { lock.unlock() }
-      output = data
+      guard output.count <= maximumBytes - data.count else { return false }
+      output.append(data)
+      return true
     }
 
-    func setErrorOutput(_ data: Data) {
+    func appendErrorOutput(_ data: Data, maximumBytes: Int) -> Bool {
       lock.lock()
       defer { lock.unlock() }
-      errorOutput = data
+      guard errorOutput.count <= maximumBytes - data.count else { return false }
+      errorOutput.append(data)
+      return true
     }
 
     var streams: (output: Data, errorOutput: Data) {
       lock.lock()
       defer { lock.unlock() }
       return (output, errorOutput)
+    }
+  }
+
+  /// Ensures a readability handler leaves its dispatch group exactly once,
+  /// including when a timeout closes its file descriptor concurrently.
+  private final class StreamDrain: @unchecked Sendable {
+    private let lock = NSLock()
+    private var finished = false
+
+    func finish(_ group: DispatchGroup) {
+      lock.lock()
+      defer { lock.unlock() }
+      guard !finished else { return }
+      finished = true
+      group.leave()
     }
   }
 
@@ -118,7 +142,17 @@ public struct SystemProcessRunner: ConfigurableProcessRunner {
     let collector = StreamCollector()
     let group = DispatchGroup()
     let queue = DispatchQueue.global(qos: .userInitiated)
-    let completion = ProcessCompletion(process: process, collector: collector, streamGroup: group)
+    let inputHandle = inputPipe?.fileHandleForWriting
+    let completion = ProcessCompletion(
+      process: process,
+      collector: collector,
+      streamGroup: group,
+      closeStreams: {
+        inputHandle?.closeFile()
+        outputPipe.fileHandleForReading.closeFile()
+        errorPipe.fileHandleForReading.closeFile()
+      }
+    )
     process.terminationHandler = { _ in completion.processExited() }
 
     do {
@@ -136,21 +170,59 @@ public struct SystemProcessRunner: ConfigurableProcessRunner {
     // soon as the child fills the pipe buffer nobody is reading: the child
     // blocks on its write and this side blocks on the stream the child is no
     // longer producing.
-    if let standardInput, let inputHandle = inputPipe?.fileHandleForWriting {
+    if let standardInput, let inputHandle {
       queue.async(group: group) {
         inputHandle.write(standardInput)
         inputHandle.closeFile()
       }
     }
     let outputHandle = outputPipe.fileHandleForReading
-    queue.async(group: group) {
-      collector.setOutput((try? outputHandle.readToEnd()) ?? Data())
-    }
     let errorHandle = errorPipe.fileHandleForReading
-    queue.async(group: group) {
-      collector.setErrorOutput((try? errorHandle.readToEnd()) ?? Data())
-    }
+    installDrain(
+      outputHandle,
+      group: group,
+      collector: collector,
+      append: { collector, data in
+        collector.appendOutput(data, maximumBytes: Self.maximumOutputBytes)
+      },
+      completion: completion
+    )
+    installDrain(
+      errorHandle,
+      group: group,
+      collector: collector,
+      append: { collector, data in
+        collector.appendErrorOutput(data, maximumBytes: Self.maximumOutputBytes)
+      },
+      completion: completion
+    )
     return try await completion.wait(timeoutSeconds: options.timeoutSeconds, queue: queue)
+  }
+
+  private func installDrain(
+    _ handle: FileHandle,
+    group: DispatchGroup,
+    collector: StreamCollector,
+    append: @escaping @Sendable (StreamCollector, Data) -> Bool,
+    completion: ProcessCompletion
+  ) {
+    group.enter()
+    let drain = StreamDrain()
+    handle.readabilityHandler = { handle in
+      let data = handle.availableData
+      guard !data.isEmpty else {
+        handle.readabilityHandler = nil
+        drain.finish(group)
+        return
+      }
+      guard append(collector, data) else {
+        handle.readabilityHandler = nil
+        handle.closeFile()
+        drain.finish(group)
+        completion.outputLimitExceeded()
+        return
+      }
+    }
   }
 
   /// Protects Process and continuation state shared by cancellation, timeout,
@@ -159,20 +231,31 @@ public struct SystemProcessRunner: ConfigurableProcessRunner {
     private let process: Process
     private let collector: StreamCollector
     private let streamGroup: DispatchGroup
+    private let closeStreams: @Sendable () -> Void
     private let lock = NSLock()
     private var continuation: CheckedContinuation<ProcessResult, any Error>?
     private var terminalReason: TerminalReason?
     private var didExit = false
+    private var finishRequested = false
+    private var didFinish = false
+    private var drainDeadlineScheduled = false
 
     private enum TerminalReason {
       case cancelled
       case timedOut
+      case outputLimitExceeded
     }
 
-    init(process: Process, collector: StreamCollector, streamGroup: DispatchGroup) {
+    init(
+      process: Process,
+      collector: StreamCollector,
+      streamGroup: DispatchGroup,
+      closeStreams: @escaping @Sendable () -> Void
+    ) {
       self.process = process
       self.collector = collector
       self.streamGroup = streamGroup
+      self.closeStreams = closeStreams
     }
 
     func wait(timeoutSeconds: Double?, queue: DispatchQueue) async throws -> ProcessResult {
@@ -192,8 +275,13 @@ public struct SystemProcessRunner: ConfigurableProcessRunner {
       lock.lock()
       self.continuation = continuation
       let exited = didExit
+      let shouldFinish = finishRequested
       lock.unlock()
-      if exited { finishAfterStreams() }
+      if shouldFinish {
+        finish()
+      } else if exited {
+        finishAfterStreams()
+      }
     }
 
     func scheduleTimeout(after seconds: Double, queue: DispatchQueue) {
@@ -212,22 +300,37 @@ public struct SystemProcessRunner: ConfigurableProcessRunner {
       lock.lock()
       didExit = true
       let hasContinuation = continuation != nil
+      let shouldScheduleDrainDeadline = !drainDeadlineScheduled
+      drainDeadlineScheduled = true
       lock.unlock()
-      if hasContinuation { finishAfterStreams() }
+      guard hasContinuation else { return }
+      finishAfterStreams()
+      if shouldScheduleDrainDeadline {
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(
+          deadline: .now() + SystemProcessRunner.streamDrainGraceSeconds
+        ) { [self] in
+          closeStreams()
+          finish()
+        }
+      }
     }
 
     private func timeout() {
       stop(reason: .timedOut)
     }
 
+    func outputLimitExceeded() {
+      stop(reason: .outputLimitExceeded)
+    }
+
     private func stop(reason: TerminalReason) {
       lock.lock()
-      guard process.isRunning else {
-        lock.unlock()
-        return
-      }
       if terminalReason == nil { terminalReason = reason }
+      let shouldTerminate = process.isRunning
       lock.unlock()
+      closeStreams()
+      finish()
+      guard shouldTerminate else { return }
       process.terminate()
       // A process may ignore SIGTERM. Escalate after a brief cleanup grace so
       // timeout and task cancellation cannot leave a credential operation
@@ -242,36 +345,54 @@ public struct SystemProcessRunner: ConfigurableProcessRunner {
 
     private func finishAfterStreams() {
       streamGroup.notify(queue: .global(qos: .userInitiated)) { [self] in
-        lock.lock()
-        guard let continuation else {
-          lock.unlock()
-          return
-        }
-        self.continuation = nil
-        let reason = terminalReason
-        let status = process.terminationStatus
+        finish()
+      }
+    }
+
+    private func finish() {
+      lock.lock()
+      guard !didFinish else {
         lock.unlock()
-        switch reason {
-        case .cancelled:
-          continuation.resume(throwing: CancellationError())
-        case .timedOut:
-          continuation.resume(
-            throwing: GatewayError(
-              code: .fileOperationFailed,
-              message: "The credential-store command timed out.",
-              recoveryGuidance: "Check kinko, then retry the operation."
-            )
+        return
+      }
+      guard let continuation else {
+        finishRequested = true
+        lock.unlock()
+        return
+      }
+      didFinish = true
+      finishRequested = false
+      self.continuation = nil
+      let reason = terminalReason
+      lock.unlock()
+      switch reason {
+      case .cancelled:
+        continuation.resume(throwing: CancellationError())
+      case .timedOut:
+        continuation.resume(
+          throwing: GatewayError(
+            code: .fileOperationFailed,
+            message: "The credential-store command timed out.",
+            recoveryGuidance: "Check kinko, then retry the operation."
           )
-        case nil:
-          let streams = collector.streams
-          continuation.resume(
-            returning: ProcessResult(
-              exitCode: status,
-              standardOutput: streams.output,
-              standardError: streams.errorOutput
-            )
+        )
+      case .outputLimitExceeded:
+        continuation.resume(
+          throwing: GatewayError(
+            code: .fileOperationFailed,
+            message: "The credential-store command produced too much output.",
+            recoveryGuidance: "Check kinko, then retry the operation."
           )
-        }
+        )
+      case nil:
+        let streams = collector.streams
+        continuation.resume(
+          returning: ProcessResult(
+            exitCode: process.terminationStatus,
+            standardOutput: streams.output,
+            standardError: streams.errorOutput
+          )
+        )
       }
     }
   }

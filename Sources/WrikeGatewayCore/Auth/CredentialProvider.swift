@@ -11,11 +11,18 @@ public protocol CredentialProvider: Sendable {
 /// Coordinates refresh-token rotation across independently constructed
 /// resolvers that address the same durable credential record.
 public actor OAuthRefreshCoordinator {
+  private struct UndurableState: Sendable {
+    let state: OAuthTokenState
+    /// The durable state observed before persistence failed. A later different
+    /// durable value proves an operator or another process safely replaced it.
+    let predecessor: OAuthTokenState?
+  }
+
   private var inFlight: [CredentialRecordKey: Task<OAuthTokenState, any Error>] = [:]
   /// A refresh token can be rotated successfully before its durable store
   /// rejects the replacement. Retain that state for the current process so a
   /// fresh facade runtime never resubmits the invalidated predecessor.
-  private var undurableStates: [CredentialRecordKey: OAuthTokenState] = [:]
+  private var undurableStates: [CredentialRecordKey: UndurableState] = [:]
 
   public init() {}
 
@@ -32,13 +39,28 @@ public actor OAuthRefreshCoordinator {
     return try await task.value
   }
 
-  func undurableState(for key: CredentialRecordKey) -> OAuthTokenState? {
-    undurableStates[key]
+  /// Reconciles a process-local rotation barrier against the durable record.
+  /// The barrier wins only while the durable record is exactly the predecessor
+  /// that upstream may already have invalidated. Any changed durable value is
+  /// authoritative and retires the stale in-memory barrier.
+  func reconciledState(
+    for key: CredentialRecordKey,
+    durableState: OAuthTokenState?
+  ) -> OAuthTokenState? {
+    guard let undurable = undurableStates[key] else { return durableState }
+    guard durableState == undurable.predecessor else {
+      undurableStates.removeValue(forKey: key)
+      return durableState
+    }
+    return undurable.state
   }
 
-  func rememberUndurable(_ state: OAuthTokenState, for keys: [CredentialRecordKey]) {
-    for key in keys {
-      undurableStates[key] = state
+  func rememberUndurable(
+    _ state: OAuthTokenState,
+    predecessors: [CredentialRecordKey: OAuthTokenState?]
+  ) {
+    for (key, predecessor) in predecessors {
+      undurableStates[key] = UndurableState(state: state, predecessor: predecessor)
     }
   }
 
@@ -54,6 +76,7 @@ public actor OAuthRefreshCoordinator {
 /// barrier and converts it to a redacted authentication error.
 private struct RefreshPersistenceFailure: Error, Sendable {
   let state: OAuthTokenState
+  let predecessors: [CredentialRecordKey: OAuthTokenState?]
 }
 
 /// Resolves the process credential and owns single-flight refresh.
@@ -152,9 +175,8 @@ public actor CredentialResolver: CredentialProvider {
     var candidates: [OAuthTokenState] = []
     for host in WrikeHostPolicy.approvedAPIHosts {
       let key = CredentialRecordKey(clientID: client.clientID, host: host)
-      if let state = await refreshCoordinator.undurableState(for: key) {
-        candidates.append(state)
-      } else if let state = try await store.load(key) {
+      let durableState = try await store.load(key)
+      if let state = await refreshCoordinator.reconciledState(for: key, durableState: durableState) {
         candidates.append(state)
       }
     }
@@ -186,10 +208,16 @@ public actor CredentialResolver: CredentialProvider {
 
     let store = self.store
     let clock = self.clock
+    let refreshCoordinator = self.refreshCoordinator
     let key = CredentialRecordKey(clientID: client.clientID, host: state.host)
     do {
       let rotated = try await refreshCoordinator.refresh(key: key) {
-        if let persisted = try await store.load(key),
+        let persistedAtSource = try await store.load(key)
+        let reconciledAtSource = await refreshCoordinator.reconciledState(
+          for: key,
+          durableState: persistedAtSource
+        )
+        if let persisted = reconciledAtSource,
            persisted.accessToken != state.accessToken
              || persisted.refreshToken != state.refreshToken
              || persisted.expiresAt > state.expiresAt {
@@ -206,10 +234,18 @@ public actor CredentialResolver: CredentialProvider {
         // durability barrier rather than silently retaining an invalidated
         // refresh token.
         let destination = CredentialRecordKey(clientID: client.clientID, host: rotated.host)
+        let persistedAtDestination = destination == key
+          ? persistedAtSource
+          : try await store.load(destination)
         do {
           try await store.replace(rotated, for: destination)
         } catch {
-          throw RefreshPersistenceFailure(state: rotated)
+          var predecessors: [CredentialRecordKey: OAuthTokenState?] = [key: persistedAtSource]
+          predecessors[destination] = persistedAtDestination
+          throw RefreshPersistenceFailure(
+            state: rotated,
+            predecessors: predecessors
+          )
         }
         if destination != key {
           do {
@@ -218,17 +254,24 @@ public actor CredentialResolver: CredentialProvider {
             do {
               try await store.replace(rotated, for: key)
             } catch {
-              throw RefreshPersistenceFailure(state: rotated)
+              throw RefreshPersistenceFailure(
+                state: rotated,
+                predecessors: [key: persistedAtSource]
+              )
             }
           }
         }
         return rotated
       }
+      let destination = CredentialRecordKey(clientID: client.clientID, host: rotated.host)
+      await refreshCoordinator.forgetStates(for: [key, destination])
       cachedState = rotated
       return rotated
     } catch let failure as RefreshPersistenceFailure {
-      let destination = CredentialRecordKey(clientID: client.clientID, host: failure.state.host)
-      await refreshCoordinator.rememberUndurable(failure.state, for: [key, destination])
+      await refreshCoordinator.rememberUndurable(
+        failure.state,
+        predecessors: failure.predecessors
+      )
       cachedState = failure.state
       throw GatewayError(
         code: .authenticationFailed,
@@ -309,6 +352,10 @@ public actor CredentialResolver: CredentialProvider {
   public func commit(_ state: OAuthTokenState) async throws {
     let key = CredentialRecordKey(clientID: state.clientID, host: state.host)
     try await store.replace(state, for: key)
+    let keys = WrikeHostPolicy.approvedAPIHosts.map {
+      CredentialRecordKey(clientID: state.clientID, host: $0)
+    }
+    await refreshCoordinator.forgetStates(for: keys)
     cachedState = state
   }
 }

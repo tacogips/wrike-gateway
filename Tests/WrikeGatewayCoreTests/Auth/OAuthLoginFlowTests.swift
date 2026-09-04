@@ -510,6 +510,62 @@ struct OAuthRefreshTests {
     #expect(await transport.requestCount == 1)
   }
 
+  @Test("A recovered durable refresh retires an older undurable rotation")
+  func recoveredPersistenceDoesNotShadowLaterDurableState() async throws {
+    let clock = TestClock()
+    let (state, key) = expiredState(clock: clock)
+    let store = InMemoryCredentialStore(seed: [key: state])
+    await store.failNextWrite()
+    let transport = RecordingTransport(
+      outcomes: [
+        .response(WrikeResponse(statusCode: 200, body: Data("""
+          {"access_token":"fake-undurable-access","refresh_token":"fake-undurable-refresh",\
+          "expires_in":60,"host":"www.wrike.com"}
+          """.utf8))),
+        .response(WrikeResponse(statusCode: 200, body: Data("""
+          {"access_token":"fake-recovered-access","refresh_token":"fake-recovered-refresh",\
+          "expires_in":3600,"host":"www.wrike.com"}
+          """.utf8))),
+        .response(WrikeResponse(statusCode: 200, body: Data("""
+          {"access_token":"fake-latest-access","refresh_token":"fake-latest-refresh",\
+          "expires_in":3600,"host":"www.wrike.com"}
+          """.utf8)))
+      ],
+      repeatsFinalOutcome: false
+    )
+    let coordinator = OAuthRefreshCoordinator()
+    let failingResolver = try makeResolver(
+      transport: transport,
+      store: store,
+      clock: clock,
+      refreshCoordinator: coordinator
+    )
+
+    await #expect(throws: GatewayError.self) {
+      _ = try await failingResolver.credential()
+    }
+
+    let recoveryResolver = try makeResolver(
+      transport: transport,
+      store: store,
+      clock: clock,
+      refreshCoordinator: coordinator
+    )
+    let recovered = try await recoveryResolver.credential()
+    #expect(recovered.token == SecretValue("fake-recovered-access"))
+
+    clock.advance(by: 3_600)
+    let freshResolver = try makeResolver(
+      transport: transport,
+      store: store,
+      clock: clock,
+      refreshCoordinator: coordinator
+    )
+    let latest = try await freshResolver.credential()
+    #expect(latest.token == SecretValue("fake-latest-access"))
+    #expect(await transport.requestCount == 3)
+  }
+
   @Test("A rejected refresh returns AUTHENTICATION_FAILED without a retry loop")
   func rejectedRefresh() async throws {
     let clock = TestClock()

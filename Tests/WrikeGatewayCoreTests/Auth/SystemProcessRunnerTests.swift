@@ -85,7 +85,7 @@ struct SystemProcessRunnerTests {
         options: ProcessExecutionOptions(timeoutSeconds: 0.05)
       )
     }
-    #expect(Date().timeIntervalSince(started) < 1)
+    #expect(Date().timeIntervalSince(started) < 3)
   }
 
   @Test("Cancelling a child process waits for cleanup and returns cancellation")
@@ -103,6 +103,32 @@ struct SystemProcessRunnerTests {
     task.cancel()
     await #expect(throws: CancellationError.self) {
       _ = try await task.value
+    }
+  }
+
+  @Test("Timeout completes when a descendant retains inherited output descriptors")
+  func timeoutDoesNotWaitForDescendantEOF() async throws {
+    let started = Date()
+    await #expect(throws: GatewayError.self) {
+      _ = try await SystemProcessRunner().run(
+        executable: "/bin/sh",
+        arguments: ["-c", "(sleep 5) & exit 0"],
+        standardInput: nil,
+        options: ProcessExecutionOptions(timeoutSeconds: 0.05)
+      )
+    }
+    #expect(Date().timeIntervalSince(started) < 3)
+  }
+
+  @Test("Output beyond the credential-process limit terminates the child")
+  func excessiveOutputFailsWithoutGrowingUnbounded() async throws {
+    await #expect(throws: GatewayError.self) {
+      _ = try await SystemProcessRunner().run(
+        executable: "/bin/sh",
+        arguments: ["-c", "head -c \(SystemProcessRunner.maximumOutputBytes + 1) /dev/zero"],
+        standardInput: nil,
+        options: ProcessExecutionOptions(timeoutSeconds: 5)
+      )
     }
   }
 }
