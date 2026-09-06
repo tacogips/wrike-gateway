@@ -27,8 +27,9 @@ let package = Package(
     .executable(name: "wrike-gateway-writer", targets: ["WrikeGatewayWriterCLI"]),
     .executable(name: "wrike-gateway-admin", targets: ["WrikeGatewayAdminCLI"])
   ],
-  // Development-only local path; an operator replaces this with a URL pin later.
-  dependencies: [.package(path: "../../gateway-sdk-kit")],
+  dependencies: [
+    .package(url: "https://github.com/tacogips/gateway-sdk-kit.git", exact: "0.1.0")
+  ],
   targets: [
     .target(
       name: "WrikeGatewayCore",

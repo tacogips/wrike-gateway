@@ -2,8 +2,8 @@
 
 ## Client SDK
 
-`GatewaySDKKit` is linked by `WrikeGatewayCore` only; the checked-in local path
-dependency is for development and will be replaced by an operator-owned URL pin.
+`GatewaySDKKit` is linked by `WrikeGatewayCore` only and pinned to its public
+GitHub release.
 Construct the facade from the module that owns the tier you need:
 
 | Tier | Constructor | Product |

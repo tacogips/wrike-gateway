@@ -1,0 +1,15 @@
+{
+  "originHash" : "e77de67e7418f246952bb7a928d1d3dc4da00b607804f40a4c63f08e19d9c1c5",
+  "pins" : [
+    {
+      "identity" : "gateway-sdk-kit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/tacogips/gateway-sdk-kit.git",
+      "state" : {
+        "revision" : "4d4b56c686f6875defccb54f74e2276022eb524e",
+        "version" : "0.1.0"
+      }
+    }
+  ],
+  "version" : 3
+}

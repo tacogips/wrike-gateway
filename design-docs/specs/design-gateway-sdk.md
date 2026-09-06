@@ -22,8 +22,7 @@ fanout and no unresolved product decision requiring a user-QA document.
 
 `Package.swift` adds:
 
-- `dependencies: [.package(path: "../../gateway-sdk-kit")]` with a one-line comment that
-  the operator switches this to a URL pin later.
+- `dependencies: [.package(url: "https://github.com/tacogips/gateway-sdk-kit.git", exact: "0.1.0")]`.
 - `.product(name: "GatewaySDKKit", package: "gateway-sdk-kit")` on the
   **`WrikeGatewayCore` target only**. Tier targets and executables see it transitively;
   the kit contains no gateway code, so `BinaryBoundaryTests` (manifest structure and

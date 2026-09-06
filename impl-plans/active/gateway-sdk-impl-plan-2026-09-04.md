@@ -76,8 +76,7 @@ only if its manifest assertion explicitly requires the additive dependency.
 
 Actions:
 
-1. Add `.package(path: "../../gateway-sdk-kit")` with the accepted one-line note
-   that an operator will replace it with a URL/revision pin later.
+1. Add `.package(url: "https://github.com/tacogips/gateway-sdk-kit.git", exact: "0.1.0")`.
 2. Add `.product(name: "GatewaySDKKit", package: "gateway-sdk-kit")` to the
    `WrikeGatewayCore` target only. Do not add it to tier or executable targets.
 3. Inspect any boundary-test failure before changing tests; update only an obsolete

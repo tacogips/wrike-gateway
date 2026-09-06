@@ -57,7 +57,7 @@ GraphQL text by hand and without widening the tier.
 
 ## Deliverables
 
-1. **Dependency.** `Package.swift`: add `.package(path: "../../gateway-sdk-kit")`
+1. **Dependency.** `Package.swift`: add `.package(url: "https://github.com/tacogips/gateway-sdk-kit.git", exact: "0.1.0")`
    (this worktree lives at `/Users/taco/gits/tacogips/wrike-gateway-worktrees/gateway-sdk`,
    so the relative path resolves to `/Users/taco/gits/tacogips/gateway-sdk-kit`) and the
    product `GatewaySDKKit` as a dependency of `WrikeGatewayCore` only (the tier targets
