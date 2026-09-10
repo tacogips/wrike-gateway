@@ -3,7 +3,7 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
-product="wrike-gateway"
+products=(wrike-gateway-reader wrike-gateway-writer wrike-gateway-admin)
 artifact_name="wrike-gateway"
 
 usage() {
@@ -155,7 +155,7 @@ swift_bin() {
 }
 
 swift_release_bin_path() {
-  local target swift_exe developer_dir sdkroot triple
+  local target swift_exe developer_dir sdkroot triple product
   target="$1"
   swift_exe="$(swift_bin)"
   developer_dir="${SWIFT_DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
@@ -164,10 +164,12 @@ swift_release_bin_path() {
 
   (
     cd "$repo_root"
+    for product in "${products[@]}"; do
+      DEVELOPER_DIR="$developer_dir" SDKROOT="$sdkroot" \
+        "$swift_exe" build -c release --product "$product" --triple "$triple" >/dev/null || return
+    done
     DEVELOPER_DIR="$developer_dir" SDKROOT="$sdkroot" \
-      "$swift_exe" build -c release --product "$product" --triple "$triple" >/dev/null
-    DEVELOPER_DIR="$developer_dir" SDKROOT="$sdkroot" \
-      "$swift_exe" build -c release --product "$product" --triple "$triple" --show-bin-path
+      "$swift_exe" build -c release --triple "$triple" --show-bin-path
   )
 }
 
@@ -178,17 +180,17 @@ print_plan() {
   release_dir="$3"
   work_dir="$release_dir/work/$artifact_name-$version-$target"
   archive="$release_dir/$artifact_name-$version-$target.tar.gz"
-  binary="$work_dir/bin/$product"
+  binary="$work_dir/bin/{${products[*]}}"
   triple="$(swift_triple_for_target "$target")"
 
   assert_child_path "$release_dir" "$work_dir"
   assert_child_path "$release_dir" "$archive"
 
   printf 'Swift Homebrew archive plan\n'
-  printf '  product: %s\n' "$product"
+  printf '  products: %s\n' "${products[*]}"
   printf '  target: %s\n' "$target"
   printf '  swift triple: %s\n' "$triple"
-  printf '  release bin path command: swift build -c release --product %s --triple %s --show-bin-path\n' "$product" "$triple"
+  printf '  release bin path command: swift build -c release --triple %s --show-bin-path\n' "$triple"
   printf '  staged binary: %s\n' "$binary"
   printf '  archive: %s\n' "$archive"
   printf '  checksum: %s.sha256\n' "$archive"
@@ -196,13 +198,12 @@ print_plan() {
 }
 
 build_target() {
-  local version target release_dir bin_path work_dir archive binary
+  local version target release_dir bin_path work_dir archive product
   version="$1"
   target="$2"
   release_dir="$3"
   work_dir="$release_dir/work/$artifact_name-$version-$target"
   archive="$release_dir/$artifact_name-$version-$target.tar.gz"
-  binary="$work_dir/bin/$product"
 
   assert_child_path "$release_dir" "$work_dir"
   assert_child_path "$release_dir" "$archive"
@@ -210,9 +211,11 @@ build_target() {
   rm -rf "$work_dir" "$archive" "$archive.sha256"
   mkdir -p "$work_dir/bin"
 
-  bin_path="$(swift_release_bin_path "$target" | tail -n 1)"
-  cp "$bin_path/$product" "$binary"
-  chmod 0755 "$binary"
+  bin_path="$(swift_release_bin_path "$target")"
+  for product in "${products[@]}"; do
+    cp "$bin_path/$product" "$work_dir/bin/$product"
+    chmod 0755 "$work_dir/bin/$product"
+  done
   cp "$repo_root/README.md" "$work_dir/README.md"
 
   tar -C "$work_dir" -czf "$archive" .
