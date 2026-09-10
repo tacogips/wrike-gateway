@@ -59,7 +59,12 @@ public struct AuthCommands: Sendable {
         hasRefreshState: true,
         hasClientConfiguration: true
       )
-      return Self.success(.object(["authorized": .bool(true), "status": report.stableValue]))
+      return Self.success(.object([
+        "authorized": .bool(true), "status": report.stableValue,
+        "tokenSource": .string("OAUTH_STORE"),
+        "effectiveTokenSource": .string(environment.nonEmptyValue(for: .accessToken) == nil ? "OAUTH_STORE" : "ENVIRONMENT_TOKEN"),
+        "tokenSourceHint": .string("Unset WRIKE_GATEWAY_ACCESS_TOKEN to use this stored OAuth credential; the environment token takes precedence on subsequent commands.")
+      ]))
     } catch let error as GatewayError {
       return Self.failure(error)
     }

@@ -107,6 +107,8 @@ public struct AuthStatusReport: Sendable, Equatable {
     let formatter = ISO8601DateFormatter()
     return .object([
       "mode": mode.map { .string($0.rawValue) } ?? .null,
+      "tokenSource": mode.map { .string($0 == .permanentToken ? "ENVIRONMENT_TOKEN" : "OAUTH_STORE") } ?? .null,
+      "tokenEnvironmentVariable": mode == .permanentToken ? .string("WRIKE_GATEWAY_ACCESS_TOKEN") : .null,
       "host": host.map(WrikeValue.string) ?? .null,
       "scopes": .array(scopes.sorted().map(WrikeValue.string)),
       "expiresAt": expiresAt.map { .string(formatter.string(from: $0)) } ?? .null,
