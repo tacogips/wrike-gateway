@@ -1,5 +1,11 @@
 # wrike-gateway
 
+`WRIKE_GATEWAY_ACCESS_TOKEN` takes precedence over stored OAuth credentials.
+After `auth oauth2`, unset it to use the newly stored grant. Login output separates
+the stored source from the source subsequent commands will select; auth status
+and provider authentication errors identify the selected source and exact
+environment override. Credential values are never included in these diagnostics.
+
 ## Client SDK
 
 `GatewaySDKKit` is linked by `WrikeGatewayCore` only and pinned to its public
