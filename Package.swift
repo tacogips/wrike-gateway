@@ -28,7 +28,7 @@ let package = Package(
     .executable(name: "wrike-gateway-admin", targets: ["WrikeGatewayAdminCLI"])
   ],
   dependencies: [
-    .package(url: "https://github.com/tacogips/gateway-sdk-kit.git", exact: "0.1.0")
+    .package(url: "https://github.com/tacogips/gateway-sdk-kit.git", .upToNextMinor(from: "0.1.0"))
   ],
   targets: [
     .target(
