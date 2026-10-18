@@ -1,5 +1,9 @@
 import Foundation
+#if os(Linux)
+import Glibc
+#else
 import Darwin
+#endif
 
 /// Runs an external process. Injected so credential-store tests never spawn a
 /// real binary and never require a provisioned vault.
